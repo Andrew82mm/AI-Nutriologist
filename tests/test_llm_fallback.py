@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -8,11 +7,8 @@ import pytest
 from nutriologist.llm.client import StructuredLLMClient
 from nutriologist.receipts.llm_fallback import extract_receipt
 from nutriologist.receipts.parse import UnsupportedReceiptFormat, parse_receipt_text
-from nutriologist.receipts.pdf_text import extract_text
 
-FIXTURES_DIR = Path(__file__).parent.parent / "чеки для парса"
-YANDEX_PDF = FIXTURES_DIR / "Gmail - Кассовый чек.pdf"
-LENTA_PDF = FIXTURES_DIR / "Gmail - Кассовый чек + (1) подарок. ООО _Лента_ 2307,53 руб.pdf"
+from receipt_fixtures import LENTA_LIKE_TEXT, YANDEX_LIKE_TEXT
 
 
 class FakeLLMClient:
@@ -30,7 +26,7 @@ class FakeLLMClient:
         return self.response
 
 
-# Modeled on the real Yandex.Food receipt in the fixtures dir, which the
+# Modeled on a Yandex.Food-style receipt (see YANDEX_LIKE_TEXT), which the
 # deterministic OFD.RU parser correctly refuses to touch (different ОФД).
 YANDEX_LIKE_RESPONSE: dict[str, Any] = {
     "store_name": 'ООО "ЯНДЕКС.ЕДА"',
@@ -145,29 +141,25 @@ def test_extract_receipt_handles_unparseable_date() -> None:
 
 
 def test_dispatcher_uses_llm_fallback_for_unsupported_format() -> None:
-    yandex_text = extract_text(YANDEX_PDF)
     llm = FakeLLMClient(YANDEX_LIKE_RESPONSE)
 
-    receipt = parse_receipt_text(yandex_text, llm=llm)
+    receipt = parse_receipt_text(YANDEX_LIKE_TEXT, llm=llm)
 
     assert receipt.source_format == "llm_fallback"
     assert len(llm.calls) == 1
-    assert llm.calls[0]["user"] == yandex_text
+    assert llm.calls[0]["user"] == YANDEX_LIKE_TEXT
 
 
 def test_dispatcher_raises_without_llm_client_for_unsupported_format() -> None:
-    yandex_text = extract_text(YANDEX_PDF)
-
     with pytest.raises(UnsupportedReceiptFormat):
-        parse_receipt_text(yandex_text)
+        parse_receipt_text(YANDEX_LIKE_TEXT)
 
 
 def test_dispatcher_prefers_deterministic_parser_over_llm() -> None:
     """When a deterministic parser matches, the LLM must not be called."""
-    lenta_text = extract_text(LENTA_PDF)
     llm = FakeLLMClient(YANDEX_LIKE_RESPONSE)
 
-    receipt = parse_receipt_text(lenta_text, llm=llm)
+    receipt = parse_receipt_text(LENTA_LIKE_TEXT, llm=llm)
 
     assert receipt.source_format == "ofd_ru"
     assert llm.calls == []
