@@ -18,16 +18,29 @@ from pathlib import Path
 from ..llm.client import StructuredLLMClient
 from ..llm.config import LLMConfigError, load_llm_client_from_env
 from .parse import UnsupportedReceiptFormat, parse_receipt_pdf
+from .pdf_text import PdfExtractionError
 
 
-def _print_receipt(pdf_path: Path, llm: StructuredLLMClient | None) -> None:
+def _print_receipt(pdf_path: Path, llm: StructuredLLMClient | None) -> bool:
+    """Print one receipt's parsed data. Returns False on failure."""
     print("=" * 80)
     print(pdf_path)
+
+    if not pdf_path.exists():
+        print(f"  ошибка: файл не найден: {pdf_path}")
+        return False
+    if not pdf_path.is_file():
+        print(f"  ошибка: не файл: {pdf_path}")
+        return False
+
     try:
         receipt = parse_receipt_pdf(pdf_path, llm=llm)
     except UnsupportedReceiptFormat:
         print("  (не распознан ни один известный формат — запусти с --llm)")
-        return
+        return True
+    except PdfExtractionError as exc:
+        print(f"  ошибка: {exc}")
+        return False
 
     print(
         f"  формат: {receipt.source_format} | магазин: {receipt.store_name} | "
@@ -44,6 +57,7 @@ def _print_receipt(pdf_path: Path, llm: StructuredLLMClient | None) -> None:
             f"    {item.quantity:>8g} x {item.unit_price:>9.2f} = {item.total:>9.2f}  "
             f"[{item.unit or '?'}]  {vat}  {item.raw_name}"
         )
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,9 +80,11 @@ def main(argv: list[str] | None = None) -> int:
     else:
         llm = None
 
+    all_ok = True
     for pdf_path in args.pdf_paths:
-        _print_receipt(pdf_path, llm)
-    return 0
+        if not _print_receipt(pdf_path, llm):
+            all_ok = False
+    return 0 if all_ok else 1
 
 
 if __name__ == "__main__":
