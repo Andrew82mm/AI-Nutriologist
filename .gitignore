@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+data/
+.pytest_cache/
+PLAN.md
+чеки для парса/
