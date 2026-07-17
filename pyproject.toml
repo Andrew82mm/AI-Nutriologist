@@ -2,10 +2,12 @@
 name = "nutriologist"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = ["python-dotenv>=1.0"]
 
 [project.optional-dependencies]
 dev = ["pytest"]
+llm-anthropic = ["anthropic>=0.68"]
+llm-openai-compatible = ["openai>=1.0"]
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -6,3 +6,4 @@ data/
 .pytest_cache/
 PLAN.md
 чеки для парса/
+.env
