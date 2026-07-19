@@ -13,9 +13,17 @@ from nutriologist.products.skurikhin import (
 def test_normalize_name_extracts_fat_and_tokens() -> None:
     tokens, fat = normalize_name("Молоко пастеризованное, 2,5% жирности")
     assert fat == 2.5
-    assert tokens[0] == "молоко"  # head noun first
+    assert tokens[0] == "молок"  # head noun first, light-stemmed
     assert "жирности" not in tokens  # stopword dropped
     assert all(t.isalpha() for t in tokens)  # no digits/punctuation leak through
+
+
+def test_stemming_bridges_singular_plural() -> None:
+    # canonical "яблоко" (sing.) must reach dataset "Яблоки" (plur.)
+    row, _ = retrieve("яблоко", "фрукты")
+    assert row.name.lower().startswith("яблок")
+    # and the light stemmer must NOT over-collapse distinct words
+    assert normalize_name("сахар")[0][0] != normalize_name("сахарное")[0][0]
 
 
 def test_fat_percent_disambiguates_variant() -> None:

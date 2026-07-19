@@ -6,14 +6,16 @@ receipt normalization yields coarser canonical names ("молоко 2,5%"). This
 module bridges that gap with a lexical retriever (no embeddings — the corpus is
 tiny) that both sides feed through the same normalizer, then scores candidates:
 
-  * gate — the query's head noun (first token) must appear in the row's tokens;
-  * score — token overlap, a strong bonus when the row *starts* with the head
-    noun, an exact fat-percent match bonus, and a soft category-section bonus,
-    minus a small "prefer the plainer name" penalty.
+  * gate — the row must be *titled* by the same head noun as the query (both
+    first tokens equal after light stemming), so "молоко" hits rows named
+    "Молоко …" but not a dish that merely mentions milk;
+  * score — token overlap, an exact fat-percent match bonus, and a soft
+    category-section bonus, minus a small "prefer the plainer name" penalty.
 
-Морфология намеренно не подключается (см. PLAN.md): обе стороны уже в им. падеже
-ед. ч., а словоформенные/синонимичные промахи (гречка↔«крупа гречневая») честно
-возвращают None и падают на LLM-оценку в каскаде.
+Лёгкий стеммер (`_stem`) срезает одно числовое/падежное окончание — этого хватает
+на регулярные формы (яблоко↔яблоки, яйцо↔яйца) без словарей/pymorphy. Нерегулярные
+основы и синонимы (куриное↔куры, гречка↔«каша гречневая») остаются промахом и
+честно падают на LLM-оценку в каскаде.
 """
 
 from __future__ import annotations
@@ -56,20 +58,36 @@ _FAT_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*%")
 _PERCENT_EXPR_RE = re.compile(r"\d+(?:[.,]\d+)?\s*%")
 _NON_CYRILLIC_RE = re.compile(r"[^а-я ]+")
 
+# Числовые/падежные окончания, длинные раньше коротких. Срезаем ровно одно и
+# только если основа остаётся ≥3 символов — это склеивает регулярные формы
+# (яблоко/яблоки, яйцо/яйца, морковь/моркови) без ложных склеек вида
+# сахар↔сахар-н-ое (у «сахарное» основа «сахарн», а не «сахар»).
+_ENDINGS = (
+    "ами", "ями", "ах", "ях", "ов", "ев", "ий", "ые", "ый", "ая", "ое",
+    "ы", "и", "а", "я", "о", "е", "ь", "й", "у", "ю",
+)
+
+
+def _stem(token: str) -> str:
+    for ending in _ENDINGS:
+        if token.endswith(ending) and len(token) - len(ending) >= 3:
+            return token[: -len(ending)]
+    return token
+
 
 def normalize_name(name: str) -> tuple[list[str], float | None]:
-    """`"Молоко ... 2,5% жирности"` → `(["молоко", ...], 2.5)`.
+    """`"Молоко ... 2,5% жирности"` → `(["молок", ...], 2.5)`.
 
-    Возвращает список токенов (порядок сохранён — первый это head noun) и
-    извлечённую жирность (или None). Цифры, латиница, пунктуация и стоп-слова
-    выброшены; ё→е.
+    Возвращает список стеммированных токенов (порядок сохранён — первый это head
+    noun) и извлечённую жирность (или None). Цифры, латиница, пунктуация и
+    стоп-слова выброшены; ё→е. Стемминг — для устойчивого матчинга словоформ.
     """
     text = name.lower().replace("ё", "е")
     fat_match = _FAT_RE.search(text)
     fat = float(fat_match.group(1).replace(",", ".")) if fat_match else None
     text = _PERCENT_EXPR_RE.sub(" ", text)
     text = _NON_CYRILLIC_RE.sub(" ", text)
-    tokens = [t for t in text.split() if len(t) > 1 and t not in _STOPWORDS]
+    tokens = [_stem(t) for t in text.split() if len(t) > 1 and t not in _STOPWORDS]
     return tokens, fat
 
 
@@ -129,13 +147,10 @@ def load_dataset() -> tuple[DatasetRow, ...]:
 def _score(
     row: DatasetRow,
     query_tokens: set[str],
-    head: str,
     query_fat: float | None,
     wanted_section: str | None,
 ) -> float:
-    score = float(len(query_tokens & row.tokens))  # overlap
-    if row.head == head:
-        score += 2.0  # строка озаглавлена тем же продуктом — сильный сигнал
+    score = float(len(query_tokens & row.tokens))  # overlap (head guaranteed in)
     if query_fat is not None:
         if row.fat_percent == query_fat:
             score += 5.0
@@ -154,8 +169,10 @@ def retrieve(
 ) -> tuple[DatasetRow, float] | None:
     """Лучшая строка датасета для канонического имени, или None если неуверенно.
 
-    Гейт: head noun запроса должен присутствовать в токенах строки. Из
-    прошедших берём максимум по `_score`; ниже `_MIN_SCORE` → None.
+    Гейт: строка должна быть *озаглавлена* тем же head noun (`row.head == head`),
+    а не просто упоминать его — так «молоко» ловит строки «Молоко …», но не блюдо,
+    где молоко лишь ингредиент. Из прошедших берём максимум по `_score`; ниже
+    `_MIN_SCORE` → None.
     """
     tokens, fat = normalize_name(canonical_name)
     if not tokens:
@@ -166,9 +183,9 @@ def retrieve(
 
     best: tuple[DatasetRow, float] | None = None
     for row in load_dataset():
-        if head not in row.tokens:
+        if row.head != head:
             continue
-        score = _score(row, token_set, head, fat, wanted_section)
+        score = _score(row, token_set, fat, wanted_section)
         if best is None or score > best[1]:
             best = (row, score)
 
