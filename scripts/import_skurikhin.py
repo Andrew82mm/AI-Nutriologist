@@ -53,6 +53,7 @@ _OFFSETS = {
 _FIELDS = [
     "code",
     "name",
+    "category_path",
     "protein",
     "fat",
     "carbs",
@@ -67,7 +68,9 @@ _FIELDS = [
     "ash",
 ]
 
+# Продукт — код с >=1 точкой; заголовок раздела может быть и одноуровневым («1»).
 _CODE_RE = re.compile(r"^\d+(\.\d+)+$")
+_ANY_CODE_RE = re.compile(r"^\d+(\.\d+)*$")
 _ROW_RE = re.compile(r"<tr.*?</tr>", re.S)
 _CELL_RE = re.compile(r"<t[dh].*?>(.*?)</t[dh]>", re.S)
 _TAG_RE = re.compile(r"<.*?>")
@@ -113,10 +116,56 @@ def _num(cell: str) -> float | None:
         return None
 
 
+def _clean_title(text: str) -> str:
+    """Схлопнуть пробелы/переносы и срезать префикс «Таблица N.»."""
+    text = re.sub(r"\s+", " ", text).strip()
+    return re.sub(r"^Таблица\s+\d+\.\s*", "", text).strip()
+
+
+def collect_headers(rows: list[str]) -> dict[str, str]:
+    """Карта {код-раздела: заголовок} из строк-заголовков разделов.
+
+    Заголовки («1.6 СЫРЫ», «1.6.5 ПЛАВЛЕНЫЕ», «12 Таблица 12. ВСПОМОГАТЕЛЬНЫЕ…»)
+    дают контекст, которого нет в листовом имени продукта («Сказка»). Признак
+    заголовка: код в позиции 0 и *ровно одна* непустая ячейка-текст после него
+    (ширина строки в исходнике плавает 2–5 колонок с пустыми хвостами). Это
+    отсекает и продукты (маркер «100» + числа), и методические таблицы (много
+    числовых ячеек).
+    """
+    headers: dict[str, str] = {}
+    for row_html in rows:
+        cells = _cells(row_html)
+        if len(cells) < 2 or not _ANY_CODE_RE.match(cells[0].strip()):
+            continue
+        if len(cells) > 2 and cells[2].strip() == "100":
+            continue  # это продукт, не заголовок
+        rest = [c for c in cells[1:] if c.strip()]
+        if len(rest) != 1:
+            continue  # у заголовка ровно один текстовый столбец — название
+        title = _clean_title(rest[0])
+        if not title or title.replace(".", "").replace(",", "").replace(" ", "").isdigit():
+            continue
+        headers.setdefault(cells[0].strip(), title)  # первое вхождение — верное
+    return headers
+
+
+def _category_path(code: str, headers: dict[str, str]) -> str:
+    """Путь из заголовков всех префиксов кода, напр. `СЫРЫ > ПЛАВЛЕНЫЕ`."""
+    parts = code.split(".")
+    titles = [
+        headers[prefix]
+        for i in range(1, len(parts))
+        if (prefix := ".".join(parts[:i])) in headers
+    ]
+    return " > ".join(titles)
+
+
 def parse_html(html_path: Path) -> list[dict]:
     data = html_path.read_text(encoding="utf-8", errors="replace")
+    rows = _ROW_RE.findall(data)
+    headers = collect_headers(rows)
     records: list[dict] = []
-    for row_html in _ROW_RE.findall(data):
+    for row_html in rows:
         cells = _cells(row_html)
         if len(cells) < 11 or not _CODE_RE.match(cells[0].strip()):
             continue
@@ -145,6 +194,7 @@ def parse_html(html_path: Path) -> list[dict]:
             continue  # строка без единого макроса — не продукт
         rec["code"] = cells[0].strip()
         rec["name"] = name
+        rec["category_path"] = _category_path(rec["code"], headers)
         rec["kcal"] = round(
             (rec["protein"] or 0) * 4
             + (rec["fat"] or 0) * 9
