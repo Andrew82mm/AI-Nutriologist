@@ -18,6 +18,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nutriologist.db" = ["schema.sql", "migrations/*.sql"]
+"nutriologist.products" = ["data/*.csv"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

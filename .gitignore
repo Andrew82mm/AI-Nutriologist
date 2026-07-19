@@ -2,7 +2,7 @@
 __pycache__/
 *.pyc
 *.egg-info/
-data/
+/data/
 .pytest_cache/
 PLAN.md
 чеки для парса/
