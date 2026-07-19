@@ -63,6 +63,22 @@ def test_source_returns_db_facts_with_code_ref() -> None:
     assert facts.protein and facts.protein > 0
 
 
+def test_curated_specific_products_resolve() -> None:
+    # user-entered БЖУ: fat% in the name is a matching key, the macros come
+    # from the columns; the specific curated row beats a generic collision.
+    tvorog, _ = retrieve("творог 5%", "молочное")
+    assert tvorog.source_ref == "curated:творог 5%"
+    assert (tvorog.protein, tvorog.fat, tvorog.carbs) == (16.0, 5.0, 3.0)
+
+    cola, _ = retrieve("кола без сахара", "напитки")
+    assert cola.source_ref == "curated:кола без сахара"
+
+    # thigh fillet (head "филе") must not collide with breast "куриное филе"
+    thigh, _ = retrieve("филе бедра куриное", "мясо")
+    assert thigh.source_ref == "curated:филе бедра куриное"
+    assert thigh.fat == 12.0
+
+
 def test_dataset_loads_once_and_is_nonempty() -> None:
     ds = load_dataset()
     assert len(ds) > 900
