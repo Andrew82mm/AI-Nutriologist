@@ -44,6 +44,16 @@ def test_unknown_product_returns_none() -> None:
     assert retrieve("стиральный порошок", "непищевое") is None
 
 
+def test_curated_fills_gap_and_beats_dish() -> None:
+    # Raw tomato is absent from the Скурихин subset (only "Помидоры жареные");
+    # the curated row fills the gap and, being plainer, wins.
+    row, _ = retrieve("помидор", "овощи")
+    assert row.source_ref == "curated:помидор"
+    assert row.protein == 1.1
+    # a dry-grain gap that was None before curation now resolves
+    assert retrieve("гречка", "крупы/макароны")[0].source_ref.startswith("curated:")
+
+
 def test_source_returns_db_facts_with_code_ref() -> None:
     product = Product(canonical_name="треска", is_food=True, category="рыба")
     facts = SkurikhinSource().lookup(product)

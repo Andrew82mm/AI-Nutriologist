@@ -30,6 +30,12 @@ from .models import NutritionFacts, Product
 
 _DATA_PACKAGE = "nutriologist.products"
 _DATA_FILE = "data/skurikhin_nutrition.csv"
+# Hand-entered staples missing from (or badly represented in) the Скурихин
+# subset — raw tomato/cucumber, dry гречка/рис, куриное филе, растительное масло.
+# Отдельные числа состава — факты (не охраняются копирайтом); файл ведётся руками
+# и подмешивается в тот же индекс на равных. Значения — стандартные справочные на
+# 100 г (сырьё/сухая крупа), ккал считается по Атуотеру, как и для датасета.
+_CURATED_FILE = "data/curated_nutrition.csv"
 
 # Слова, не несущие различающего смысла в именах — выкидываем из токенов, чтобы
 # они не разбавляли overlap и «prefer plainer».
@@ -93,13 +99,13 @@ def normalize_name(name: str) -> tuple[list[str], float | None]:
 
 @dataclass(frozen=True)
 class DatasetRow:
-    code: str
     name: str
     category_path: str
     kcal: float | None
     protein: float | None
     fat: float | None
     carbs: float | None
+    source_ref: str  # 'skurikhin:<code>' | 'curated:<name>' — провенанс числа
     # Предвычислено для матчинга:
     tokens: frozenset[str]
     head: str | None
@@ -117,31 +123,78 @@ def _parse_float(value: str) -> float | None:
         return None
 
 
+def _read_csv(filename: str) -> list[dict[str, str]]:
+    text = resources.files(_DATA_PACKAGE).joinpath(filename).read_text(encoding="utf-8")
+    return list(csv.DictReader(text.splitlines()))
+
+
+def _build_row(
+    *,
+    name: str,
+    category_path: str,
+    protein: float | None,
+    fat: float | None,
+    carbs: float | None,
+    kcal: float | None,
+    source_ref: str,
+) -> DatasetRow:
+    tokens, name_fat = normalize_name(name)
+    return DatasetRow(
+        name=name,
+        category_path=category_path,
+        kcal=kcal,
+        protein=protein,
+        fat=fat,
+        carbs=carbs,
+        source_ref=source_ref,
+        tokens=frozenset(tokens),
+        head=tokens[0] if tokens else None,
+        fat_percent=name_fat,
+        section=category_path.split(" > ")[0],
+    )
+
+
+def _atwater(protein: float | None, fat: float | None, carbs: float | None) -> float:
+    return round((protein or 0) * 4 + (fat or 0) * 9 + (carbs or 0) * 4, 1)
+
+
 @lru_cache(maxsize=1)
 def load_dataset() -> tuple[DatasetRow, ...]:
-    """Загрузить и проиндексировать датасет (один раз, кэш на процесс)."""
-    csv_text = (
-        resources.files(_DATA_PACKAGE).joinpath(_DATA_FILE).read_text(encoding="utf-8")
-    )
-    out: list[DatasetRow] = []
-    for raw in csv.DictReader(csv_text.splitlines()):
-        tokens, name_fat = normalize_name(raw["name"])
-        out.append(
-            DatasetRow(
-                code=raw["code"],
+    """Загрузить и проиндексировать датасет (один раз, кэш на процесс).
+
+    Скурихин (извлечён из справочника) + курируемые вручную staples — в один
+    индекс. При совпадении head noun «prefer plainer» естественно выводит вперёд
+    короткое курируемое имя («помидор») над блюдом Скурихина («Помидоры жареные»).
+    """
+    rows: list[DatasetRow] = []
+    for raw in _read_csv(_DATA_FILE):
+        rows.append(
+            _build_row(
                 name=raw["name"],
                 category_path=raw["category_path"],
-                kcal=_parse_float(raw["kcal"]),
                 protein=_parse_float(raw["protein"]),
                 fat=_parse_float(raw["fat"]),
                 carbs=_parse_float(raw["carbs"]),
-                tokens=frozenset(tokens),
-                head=tokens[0] if tokens else None,
-                fat_percent=name_fat,
-                section=raw["category_path"].split(" > ")[0],
+                kcal=_parse_float(raw["kcal"]),
+                source_ref=f"skurikhin:{raw['code']}",
             )
         )
-    return tuple(out)
+    for raw in _read_csv(_CURATED_FILE):
+        protein = _parse_float(raw["protein"])
+        fat = _parse_float(raw["fat"])
+        carbs = _parse_float(raw["carbs"])
+        rows.append(
+            _build_row(
+                name=raw["name"],
+                category_path=raw["category_path"],
+                protein=protein,
+                fat=fat,
+                carbs=carbs,
+                kcal=_atwater(protein, fat, carbs),
+                source_ref=f"curated:{raw['name']}",
+            )
+        )
+    return tuple(rows)
 
 
 def _score(
@@ -195,7 +248,7 @@ def retrieve(
 
 
 class SkurikhinSource:
-    """`NutritionSource` поверх датасета Скурихина (source='db')."""
+    """`NutritionSource` поверх справочного датасета (Скурихин + курируемые), source='db'."""
 
     def lookup(self, product: Product) -> NutritionFacts | None:
         match = retrieve(product.canonical_name, product.category)
@@ -208,5 +261,5 @@ class SkurikhinSource:
             fat=row.fat,
             carbs=row.carbs,
             source="db",
-            source_ref=f"skurikhin:{row.code}",
+            source_ref=row.source_ref,
         )
