@@ -1,10 +1,10 @@
 """Resolve per-100 nutrition for a product through a source cascade.
 
 Design (PLAN.md итерация 2): the resolver is a cascade of `NutritionSource`s
-tried in priority order. For the MVP only two ends are wired up — a small
-static stub of common products and an LLM estimate — but real sources (Open
-Food Facts, a static RF dataset) plug in as extra `NutritionSource`s without
-changing the resolver.
+tried in priority order — a small curated static stub, then the Скурихин RF
+dataset (`SkurikhinSource`), then an LLM estimate as a last resort. New sources
+(e.g. Open Food Facts) plug in as extra `NutritionSource`s without changing the
+resolver.
 
 Once resolved, facts are cached in the `nutrition` table so a repeat lookup
 costs nothing. `save_nutrition` is rank-aware: an 'llm_estimate' never
@@ -18,6 +18,7 @@ from typing import Protocol
 
 from ..llm.client import StructuredLLMClient
 from .models import NUTRITION_SOURCE_RANK, NutritionFacts, Product
+from .skurikhin import SkurikhinSource
 
 
 class NutritionSource(Protocol):
@@ -167,7 +168,7 @@ def resolve_nutrition(
         if cached is not None:
             return cached
 
-    sources: list[NutritionSource] = [StaticStubSource()]
+    sources: list[NutritionSource] = [StaticStubSource(), SkurikhinSource()]
     if llm is not None:
         sources.append(LLMEstimateSource(llm))
 
