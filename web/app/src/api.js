@@ -33,4 +33,7 @@ export const api = {
   chat: (text) => request("/chat", { method: "POST", body: { text } }),
   logMeal: (items, rawText) => request("/meals", { method: "POST", body: { items, raw_text: rawText } }),
   addInventory: (items) => request("/inventory", { method: "POST", body: { items } }),
+  addManualMeal: (items) => request("/meals/manual", { method: "POST", body: { items } }),
+  updateMeal: (id, items) => request(`/meals/${id}`, { method: "PUT", body: { items } }),
+  deleteMeal: (id) => request(`/meals/${id}`, { method: "DELETE" }),
 };

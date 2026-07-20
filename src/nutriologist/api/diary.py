@@ -29,6 +29,11 @@ class DiaryItem(BaseModel):
     name: str
     grams: float
     unit: str | None
+    # Per-item macros (for pre-filling the edit form).
+    kcal: float = 0
+    protein: float = 0
+    fat: float = 0
+    carbs: float = 0
 
 
 class DiaryMeal(BaseModel):
@@ -37,6 +42,21 @@ class DiaryMeal(BaseModel):
     title: str
     items: list[DiaryItem]
     macros: Macros
+    # Provenance of the meal's nutrition, for the card tag: 'база' (dataset),
+    # 'введено' (hand-entered) or '≈ оценка' (LLM estimate).
+    source: str = "введено"
+
+
+def _source_label(sources: list[str | None]) -> str:
+    """Lowest-confidence nutrition source across a meal's items wins the label."""
+    present = [s for s in sources if s]
+    if not present:
+        return "введено"
+    if "llm_estimate" in present:
+        return "≈ оценка"
+    if "user" in present:
+        return "введено"
+    return "база"
 
 
 class DiaryDay(BaseModel):
@@ -91,7 +111,7 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
         item_rows = conn.execute(
             """
             SELECT p.canonical_name, p.canonical_unit, mi.grams,
-                   n.kcal, n.protein, n.fat, n.carbs
+                   n.kcal, n.protein, n.fat, n.carbs, n.source
             FROM meal_items mi
             JOIN products p ON p.id = mi.product_id
             LEFT JOIN nutrition n ON n.product_id = mi.product_id
@@ -105,12 +125,19 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
         for it in item_rows:
             g = it["grams"] or 0
             k = g / 100
-            mm.kcal += (it["kcal"] or 0) * k
-            mm.protein += (it["protein"] or 0) * k
-            mm.fat += (it["fat"] or 0) * k
-            mm.carbs += (it["carbs"] or 0) * k
+            ik, ip, iff, ic = (
+                (it["kcal"] or 0) * k, (it["protein"] or 0) * k,
+                (it["fat"] or 0) * k, (it["carbs"] or 0) * k,
+            )
+            mm.kcal += ik
+            mm.protein += ip
+            mm.fat += iff
+            mm.carbs += ic
             items.append(
-                DiaryItem(name=it["canonical_name"], grams=g, unit=it["canonical_unit"])
+                DiaryItem(
+                    name=it["canonical_name"], grams=g, unit=it["canonical_unit"],
+                    kcal=round(ik), protein=round(ip), fat=round(iff), carbs=round(ic),
+                )
             )
 
         mm = Macros(**{k: round(v) for k, v in mm.model_dump().items()})
@@ -122,6 +149,7 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
             DiaryMeal(
                 id=mrow["id"], ts=mrow["ts"], title=_meal_title(mrow["ts"]),
                 items=items, macros=mm,
+                source=_source_label([it["source"] for it in item_rows]),
             )
         )
 

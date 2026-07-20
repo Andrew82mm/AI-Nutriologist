@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..inventory import ledger
@@ -56,6 +56,25 @@ def ensure_nutrition(conn: sqlite3.Connection, product_id: int, per100: tuple) -
         "INSERT INTO nutrition (product_id, kcal, protein, fat, carbs, source, updated_at) "
         "VALUES (?, ?, ?, ?, ?, 'db', datetime('now')) "
         "ON CONFLICT(product_id) DO NOTHING",
+        (product_id, kcal, protein, fat, carbs),
+    )
+
+
+def set_user_nutrition(conn: sqlite3.Connection, product_id: int, macros: tuple) -> None:
+    """Overwrite a product's nutrition with hand-entered ('user') macros.
+
+    Used by the manual meal form, where the user types macros per position. We
+    store them as this product's per-100 profile and log the item at grams=100,
+    so the diary recomputes exactly the typed numbers. 'user' is the top-ranked
+    source, so this is the user deliberately defining the product's nutrition.
+    """
+    kcal, protein, fat, carbs = macros
+    conn.execute(
+        "INSERT INTO nutrition (product_id, kcal, protein, fat, carbs, source, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, 'user', datetime('now')) "
+        "ON CONFLICT(product_id) DO UPDATE SET "
+        "kcal=excluded.kcal, protein=excluded.protein, fat=excluded.fat, "
+        "carbs=excluded.carbs, source='user', updated_at=datetime('now')",
         (product_id, kcal, protein, fat, carbs),
     )
 
@@ -115,6 +134,87 @@ def create_meal(payload: MealCreate, conn: sqlite3.Connection = Depends(db_conn)
         )
     conn.commit()
     return {"meal_id": meal_id}
+
+
+# --- manual meal add / edit / delete (the meal form) -----------------------
+class ManualItem(BaseModel):
+    name: str
+    kcal: float = 0
+    protein: float = 0
+    fat: float = 0
+    carbs: float = 0
+
+
+class ManualMeal(BaseModel):
+    items: list[ManualItem]
+    raw_text: str = ""
+
+
+def _write_manual_items(conn: sqlite3.Connection, meal_id: int, items: list[ManualItem]) -> None:
+    """Store each typed position as a product logged at grams=100 with its macros.
+
+    Macros drive the diary. Inventory is drawn down separately: the free-text
+    position name is run through the same phrase parser as chat's `eat`, and any
+    recognized product + amount posts a `meal (−)` ledger transaction. Names that
+    parse to nothing (e.g. «Овсянка с бананом») still count for calories but
+    don't touch the fridge — there's nothing to match.
+    """
+    for it in items:
+        name = it.name.strip()
+        if not name:
+            continue
+        pid = ensure_product(conn, name, None, "g")
+        set_user_nutrition(conn, pid, (it.kcal, it.protein, it.fat, it.carbs))
+        conn.execute(
+            "INSERT INTO meal_items (meal_id, product_id, grams, grams_source) "
+            "VALUES (?, ?, 100, 'user')",
+            (meal_id, pid),
+        )
+        for pf in foods.parse_foods(name):
+            rpid = ensure_product(conn, pf.name, pf.cat, pf.canonical_unit)
+            ledger.record(
+                conn, product_id=rpid, change_amount=-abs(pf.amount_canonical),
+                source_type="meal", source_id=meal_id,
+            )
+
+
+def _clear_meal(conn: sqlite3.Connection, meal_id: int) -> None:
+    """Remove a meal's items and any inventory decrements it posted."""
+    conn.execute("DELETE FROM meal_items WHERE meal_id = ?", (meal_id,))
+    conn.execute(
+        "DELETE FROM inventory_ledger WHERE source_type = 'meal' AND source_id = ?",
+        (meal_id,),
+    )
+
+
+@router.post("/meals/manual")
+def create_manual_meal(payload: ManualMeal, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
+    """Create a meal from hand-entered positions (name + kcal/Б/Ж/У each)."""
+    meal_id = conn.execute(
+        "INSERT INTO meals (ts, raw_text) VALUES (datetime('now'), ?)", (payload.raw_text,)
+    ).lastrowid
+    _write_manual_items(conn, meal_id, payload.items)
+    conn.commit()
+    return {"meal_id": meal_id}
+
+
+@router.put("/meals/{meal_id}")
+def update_meal(meal_id: int, payload: ManualMeal, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
+    """Replace a meal's positions from the edit form (redefines it as manual)."""
+    if conn.execute("SELECT 1 FROM meals WHERE id = ?", (meal_id,)).fetchone() is None:
+        raise HTTPException(status_code=404, detail="приём не найден")
+    _clear_meal(conn, meal_id)
+    _write_manual_items(conn, meal_id, payload.items)
+    conn.commit()
+    return {"meal_id": meal_id}
+
+
+@router.delete("/meals/{meal_id}", status_code=204)
+def delete_meal(meal_id: int, conn: sqlite3.Connection = Depends(db_conn)) -> None:
+    """Delete a meal, its items, and any inventory decrements it posted."""
+    _clear_meal(conn, meal_id)
+    conn.execute("DELETE FROM meals WHERE id = ?", (meal_id,))
+    conn.commit()
 
 
 @router.post("/inventory")
