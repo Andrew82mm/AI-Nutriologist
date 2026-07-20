@@ -5,7 +5,8 @@ requires-python = ">=3.12"
 dependencies = ["python-dotenv>=1.0"]
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "httpx"]
+api = ["fastapi>=0.115", "uvicorn>=0.30"]
 llm-anthropic = ["anthropic>=0.68"]
 llm-openai-compatible = ["openai>=1.0"]
 

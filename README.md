@@ -72,6 +72,51 @@ cp .env.example .env   # заполнить LLM_PROVIDER / LLM_API_KEY / LLM_MOD
 
 Для работы с PDF нужен `pdftotext` (пакет `poppler-utils`): `sudo apt install poppler-utils`.
 
+## Веб-интерфейс
+
+Веб-приложение состоит из двух частей, которые в разработке запускаются как два
+процесса:
+
+**1. HTTP-API (FastAPI) поверх ядра `nutriologist`** — модуль `nutriologist.api`.
+Это тонкий адаптер: каждый эндпоинт открывает соединение с БД и вызывает
+существующие доменные модули (`inventory`, `products`, ...).
+
+```bash
+.venv/bin/pip install -e ".[api]"     # fastapi + uvicorn
+.venv/bin/python -m nutriologist.api    # http://127.0.0.1:8000
+```
+
+Порт/хост — через переменные окружения (`NUTRIOLOGIST_API_PORT`,
+`NUTRIOLOGIST_API_HOST`, `NUTRIOLOGIST_API_RELOAD=1` для автоперезагрузки).
+
+Эндпоинты:
+
+| Метод | Путь | Назначение |
+|-------|------|------------|
+| GET | `/api/health` | health-check |
+| GET | `/api/inventory` | холодильник (остатки из ledger) |
+| POST | `/api/inventory` | добавить купленное (приход в ledger) |
+| GET | `/api/diary/today` | приёмы пищи за сегодня + БЖУ + цель |
+| POST | `/api/meals` | записать съеденное |
+| GET/PUT | `/api/profile` | цели, ограничения, метрики тела |
+| POST | `/api/chat` | разбор фразы («съел…», «купил…», «отчёт») |
+
+**2. Фронтенд (Vite + React)** — в `web/app/`. Переиспользует дизайн-систему
+Organic из `web/_ds/`. В дев-режиме `/api` проксируется на бэкенд (см.
+`web/app/vite.config.js`).
+
+```bash
+cd web/app
+npm install
+npm run dev        # http://localhost:5173
+```
+
+Прототип-эталон дизайна (экспорт из дизайн-инструмента) лежит рядом —
+`web/Трекер питания.dc.html`; фронт в `web/app/` собран по нему заново.
+
+Экран «План» пока показывает демо-данные: движка планирования меню на бэкенде
+ещё нет (см. [Дальше по плану](#дальше-по-плану)).
+
 ## CI/CD
 
 На каждый push и pull request в `main` GitHub Actions ([.github/workflows/ci.yml](.github/workflows/ci.yml)) прогоняет тесты на Python 3.12 и 3.13:
@@ -102,7 +147,15 @@ src/nutriologist/
   db/
     connection.py       # get_connection(), применение схемы и миграций
     schema.sql           # DDL всех таблиц
-tests/                  # 37 тестов на синтетических фикстурах + фейковом LLM-клиенте
+  api/                  # HTTP-слой (FastAPI) поверх ядра — см. «Веб-интерфейс»
+    app.py               # фабрика приложения, CORS, соединение на запрос
+    inventory.py / diary.py / profile.py / actions.py  # роутеры
+    foods.py             # rule-based разбор фраз для /api/chat
+web/
+  app/                  # фронтенд Vite + React (экраны + слой api.js)
+  _ds/                  # дизайн-система Organic (общие стили/токены)
+  Трекер питания.dc.html # прототип-эталон дизайна
+tests/                  # тесты на синтетических фикстурах + фейковом LLM-клиенте
 .github/workflows/ci.yml # тесты на Python 3.12/3.13 при каждом push и PR
 ```
 
