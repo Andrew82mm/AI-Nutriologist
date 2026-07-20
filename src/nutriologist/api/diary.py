@@ -27,8 +27,10 @@ class Macros(BaseModel):
 
 class DiaryItem(BaseModel):
     name: str
-    grams: float
-    unit: str | None
+    grams: float             # macro weight (g); portion basis for БЖУ
+    unit: str | None         # product's canonical unit: g | ml | piece
+    amount_canonical: float | None = None  # amount in `unit` (pieces for шт) — for the edit form
+    known: bool = True       # False → no nutrition on file; the form shows «?»
     # Per-item macros (for pre-filling the edit form).
     kcal: float = 0
     protein: float = 0
@@ -39,7 +41,8 @@ class DiaryItem(BaseModel):
 class DiaryMeal(BaseModel):
     id: int
     ts: str
-    title: str
+    title: str  # effective title (custom, else derived from time) — for display
+    custom_title: str | None = None  # raw user-set title, or None — for the edit form
     items: list[DiaryItem]
     macros: Macros
     # Provenance of the meal's nutrition, for the card tag: 'база' (dataset),
@@ -67,12 +70,8 @@ class DiaryDay(BaseModel):
     meals: list[DiaryMeal]
 
 
-def _meal_title(ts: str) -> str:
-    """Завтрак/Обед/Ужин/Перекус from the meal timestamp's hour."""
-    try:
-        hour = int(ts[11:13])
-    except (ValueError, IndexError):
-        return "Приём пищи"
+def title_for_hour(hour: int) -> str:
+    """Завтрак/Обед/Ужин/Перекус for a given hour of day."""
     if hour < 11:
         return "Завтрак"
     if hour < 16:
@@ -80,6 +79,14 @@ def _meal_title(ts: str) -> str:
     if hour < 21:
         return "Ужин"
     return "Перекус"
+
+
+def _meal_title(ts: str) -> str:
+    """Meal title derived from the timestamp's hour (fallback when unnamed)."""
+    try:
+        return title_for_hour(int(ts[11:13]))
+    except (ValueError, IndexError):
+        return "Приём пищи"
 
 
 def load_goal(conn: sqlite3.Connection) -> Macros:
@@ -102,7 +109,7 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
     today = date.today().isoformat()
 
     meal_rows = conn.execute(
-        "SELECT id, ts FROM meals WHERE substr(ts, 1, 10) = ? ORDER BY ts", (today,)
+        "SELECT id, ts, title FROM meals WHERE substr(ts, 1, 10) = ? ORDER BY ts", (today,)
     ).fetchall()
 
     meals: list[DiaryMeal] = []
@@ -110,7 +117,7 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
     for mrow in meal_rows:
         item_rows = conn.execute(
             """
-            SELECT p.canonical_name, p.canonical_unit, mi.grams,
+            SELECT p.canonical_name, p.canonical_unit, mi.grams, mi.amount_canonical,
                    n.kcal, n.protein, n.fat, n.carbs, n.source
             FROM meal_items mi
             JOIN products p ON p.id = mi.product_id
@@ -136,6 +143,7 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
             items.append(
                 DiaryItem(
                     name=it["canonical_name"], grams=g, unit=it["canonical_unit"],
+                    amount_canonical=it["amount_canonical"], known=it["source"] is not None,
                     kcal=round(ik), protein=round(ip), fat=round(iff), carbs=round(ic),
                 )
             )
@@ -147,7 +155,9 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
         total.carbs += mm.carbs
         meals.append(
             DiaryMeal(
-                id=mrow["id"], ts=mrow["ts"], title=_meal_title(mrow["ts"]),
+                id=mrow["id"], ts=mrow["ts"],
+                title=(mrow["title"] or _meal_title(mrow["ts"])),
+                custom_title=mrow["title"],
                 items=items, macros=mm,
                 source=_source_label([it["source"] for it in item_rows]),
             )

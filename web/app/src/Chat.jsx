@@ -101,7 +101,7 @@ export default function Chat({ onClose, onCommit }) {
 
   const confirm = async (msg) => {
     try {
-      if (msg.kind === "eat") await api.logMeal(msg.items, "");
+      if (msg.kind === "eat") await api.logMeal(msg.items, "", msg.title);
       else if (msg.kind === "buy") await api.addInventory(msg.items);
       setMessages((m) => m.map((x) => (x.id === msg.id ? { ...x, done: true } : x)));
       onCommit?.();

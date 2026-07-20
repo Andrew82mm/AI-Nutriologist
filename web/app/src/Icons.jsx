@@ -75,3 +75,13 @@ export const IconSun = ({ size = 19 }) =>
 
 export const IconMoon = ({ size = 19 }) =>
   svg(size, <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />, { strokeWidth: 2.4 });
+
+export const IconTrash = ({ size = 18 }) =>
+  svg(size, (
+    <>
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M10 11v6M14 11v6" />
+    </>
+  ), { strokeWidth: 2.2 });

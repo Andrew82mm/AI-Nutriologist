@@ -139,6 +139,25 @@ _RE_BUY = re.compile(r"куп|прибрел|приобрел|взял|прин�
 _RE_EAT = re.compile(r"съе|поел|ел |выпил|перекус|позавтрак|пообед|поужин|скушал|навернул|съест")
 
 
+# Meal-name keywords → canonical title, for naming a meal via chat
+# («на завтрак съел…», «обед: борщ»).
+_MEAL_TITLES = [
+    (("завтрак", "позавтрак"), "Завтрак"),
+    (("обед", "пообед"), "Обед"),
+    (("ужин", "поужин"), "Ужин"),
+    (("перекус",), "Перекус"),
+]
+
+
+def detect_meal_title(text: str) -> str | None:
+    """Meal name mentioned in a phrase, or None to fall back to the time of day."""
+    t = text.lower().replace("ё", "е")
+    for stems, title in _MEAL_TITLES:
+        if any(s in t for s in stems):
+            return title
+    return None
+
+
 def detect_intent(text: str) -> str:
     """Classify a chat phrase: 'report' | 'recipes' | 'buy' | 'eat' | 'unknown'."""
     t = text.lower().replace("ё", "е")

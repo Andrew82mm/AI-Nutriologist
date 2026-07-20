@@ -46,7 +46,7 @@ export default function App() {
           onChanged={() => setReloadKey((k) => k + 1)}
         />
       );
-      case "fridge": return <Fridge reloadKey={reloadKey} />;
+      case "fridge": return <Fridge reloadKey={reloadKey} onChanged={() => setReloadKey((k) => k + 1)} />;
       case "plan": return <Plan />;
       case "profile": return <Profile />;
       default: return null;

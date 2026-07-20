@@ -27,13 +27,21 @@ async function request(path, { method = "GET", body } = {}) {
 export const api = {
   health: () => request("/health"),
   getInventory: () => request("/inventory"),
+  getLastReceipt: () => request("/receipts/last"),
+  inventoryAction: (productId, action) =>
+    request(`/inventory/${productId}/action`, { method: "POST", body: { action } }),
+  cook: (name, ingredients, yieldGrams) =>
+    request("/cook", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams } }),
   getDiary: () => request("/diary/today"),
   getProfile: () => request("/profile"),
   putProfile: (profile) => request("/profile", { method: "PUT", body: profile }),
   chat: (text) => request("/chat", { method: "POST", body: { text } }),
-  logMeal: (items, rawText) => request("/meals", { method: "POST", body: { items, raw_text: rawText } }),
+  logMeal: (items, rawText, title) =>
+    request("/meals", { method: "POST", body: { items, raw_text: rawText, title } }),
   addInventory: (items) => request("/inventory", { method: "POST", body: { items } }),
-  addManualMeal: (items) => request("/meals/manual", { method: "POST", body: { items } }),
-  updateMeal: (id, items) => request(`/meals/${id}`, { method: "PUT", body: { items } }),
+  // Live preview of unit + portion КБЖУ + fridge presence for typed positions.
+  estimateMeal: (items) => request("/meals/estimate", { method: "POST", body: { items } }),
+  updateMeal: (id, items, title) =>
+    request(`/meals/${id}`, { method: "PUT", body: { items, title } }),
   deleteMeal: (id) => request(`/meals/${id}`, { method: "DELETE" }),
 };

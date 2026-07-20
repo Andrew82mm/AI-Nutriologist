@@ -133,9 +133,9 @@ export default function Diary({ reloadKey, onOpenChat, onOpenFridge, onChanged }
     onChanged?.(); // bump parent reloadKey → refetch diary + inventory
   };
 
-  const saveMeal = async (items) => {
-    if (form?.mode === "edit") await api.updateMeal(form.meal.id, items);
-    else await api.addManualMeal(items);
+  const saveMeal = async (items, title) => {
+    if (form?.mode === "edit") await api.updateMeal(form.meal.id, items, title);
+    else await api.logMeal(items, "", title);
     afterChange();
   };
   const deleteMeal = async () => {
@@ -202,6 +202,7 @@ export default function Diary({ reloadKey, onOpenChat, onOpenFridge, onChanged }
                   key={m.id}
                   mode="edit"
                   initialItems={m.items}
+                  initialTitle={m.custom_title}
                   onSave={saveMeal}
                   onDelete={deleteMeal}
                   onCancel={() => setForm(null)}
