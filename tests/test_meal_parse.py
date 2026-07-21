@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import nutriologist.api.actions as actions
+from nutriologist.api import foods
 from nutriologist.db import get_connection
-from nutriologist.products.meal_parse import parse_meal_text
+from nutriologist.inventory import ledger
+from nutriologist.products.meal_parse import parse_cook_text, parse_meal_text
 
-from product_fakes import RoutingFakeLLM, meal_response, nutrition_response
+from product_fakes import (
+    RoutingFakeLLM,
+    cook_response,
+    meal_response,
+    nutrition_response,
+)
 
 
 # --- unit: parse_meal_text -------------------------------------------------
@@ -181,6 +188,69 @@ def test_parse_meal_text_reads_inline_macros() -> None:
     res = parse_meal_text("съел 37г сыр с бжу 31,2 18,2", llm)
     it = res.items[0]
     assert it.user_macros == (31.2, 18.2, 0.0)  # carbs defaulted to 0
+
+
+# --- cooking a dish via chat ------------------------------------------------
+def test_detect_intent_distinguishes_cook_from_recipes() -> None:
+    assert foods.detect_intent("Приготовил блюдо: куриные бёдра в меду") == "cook"
+    assert foods.detect_intent("приготовил борщ") == "cook"
+    assert foods.detect_intent("что приготовить?") == "recipes"
+
+
+def test_parse_cook_text_reads_dish_and_ingredients() -> None:
+    llm = RoutingFakeLLM(cook=cook_response(
+        name="куриные бёдра в меду",
+        yield_grams=1050,
+        ingredients=[
+            {"name": "мёд", "grams": 70},
+            {"name": "соевый соус", "grams": 21},
+            {"name": "масло", "grams": 17},
+            {"name": "куриные бёдра", "grams": 1000},
+        ],
+    ))
+    res = parse_cook_text("приготовил куриные бёдра в меду ...", llm)
+    assert res.name == "куриные бёдра в меду"
+    assert res.yield_grams == 1050
+    assert [i.name for i in res.ingredients] == ["мёд", "соевый соус", "масло", "куриные бёдра"]
+
+
+def test_chat_cook_preview(monkeypatch) -> None:
+    conn = get_connection(":memory:")
+    llm = RoutingFakeLLM(cook=cook_response(
+        name="омлет", ingredients=[{"name": "яйцо", "grams": 100}, {"name": "молоко", "grams": 50}],
+    ))
+    monkeypatch.setattr(actions, "get_optional_llm", lambda: llm)
+
+    resp = _chat(conn, "приготовил омлет из 2 яиц и молока")
+
+    assert resp["intent"] == "cook"
+    assert resp["name"] == "омлет"
+    assert resp["yield_grams"] == 150  # no yield given → sum of ingredients
+    assert [i["name"] for i in resp["ingredients"]] == ["яйцо", "молоко"]
+
+
+def test_cook_from_chat_consumes_ingredients_and_stocks_dish() -> None:
+    conn = get_connection(":memory:")
+    # Stock an ingredient so we can see it drawn down.
+    egg = conn.execute(
+        "INSERT INTO products (canonical_name, is_food, canonical_unit) VALUES ('яйцо',1,'g')"
+    ).lastrowid
+    ledger.record(conn, product_id=egg, change_amount=300, source_type="manual")
+    conn.commit()
+
+    payload = actions.CookFromChatRequest(
+        name="омлет",
+        ingredients=[{"name": "яйцо", "grams": 100}, {"name": "молоко", "grams": 50}],
+    )
+    out = actions.cook_from_chat(payload, conn)
+
+    assert out["name"] == "омлет"
+    assert ledger.balance(conn, egg) == 200  # 300 − 100 consumed
+    dish = conn.execute(
+        "SELECT id FROM products WHERE canonical_name = 'омлет' AND category = 'блюда'"
+    ).fetchone()
+    assert dish is not None
+    assert ledger.balance(conn, dish["id"]) == 150  # yield stocked (100+50)
 
 
 # --- point B: qualified variants aren't coerced onto a coarse staple --------

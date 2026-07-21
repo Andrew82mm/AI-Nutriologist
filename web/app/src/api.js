@@ -33,6 +33,8 @@ export const api = {
     request(`/inventory/${productId}/action`, { method: "POST", body: { action } }),
   cook: (name, ingredients, yieldGrams) =>
     request("/cook", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams } }),
+  cookFromChat: (name, ingredients, yieldGrams) =>
+    request("/cook/from-chat", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams } }),
   getDiary: () => request("/diary/today"),
   getStats: (days = 7) => request(`/stats?days=${days}`),
   getProfile: () => request("/profile"),

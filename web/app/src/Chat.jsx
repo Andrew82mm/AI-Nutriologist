@@ -16,11 +16,39 @@ const INTRO = {
 };
 
 // Renders one assistant response of a given kind. `kind` mirrors the backend's
-// `intent` ('eat' | 'buy' | 'report' | 'recipes' | 'unknown'); the client-made
-// intro uses 'text'. Anything that isn't a card but carries `.text` is a bubble.
+// `intent` ('eat' | 'buy' | 'report' | 'recipes' | 'cook' | 'unknown'); the
+// client-made intro uses 'text'. Anything that isn't a card but carries `.text`
+// is a bubble.
 function BotMessage({ msg, onConfirm }) {
-  if (msg.kind !== "eat" && msg.kind !== "buy" && msg.kind !== "report" && msg.text) {
+  const isCard = ["eat", "buy", "report"].includes(msg.kind) || (msg.kind === "cook" && msg.name);
+  if (!isCard && msg.text) {
     return <div className="bubble bubble-bot" style={{ whiteSpace: "pre-line" }}>{msg.text}</div>;
+  }
+
+  if (msg.kind === "cook") {
+    return (
+      <div className="confirm-card">
+        <b>Приготовить блюдо?</b>
+        <div className="confirm-item"><span>Блюдо</span><span>{msg.name}</span></div>
+        {msg.ingredients.map((it, i) => (
+          <div className="confirm-item" key={i}>
+            <span>{it.name}</span>
+            <span>{it.grams} г</span>
+          </div>
+        ))}
+        <div className="confirm-item" style={{ borderTop: "1px solid var(--color-divider)", marginTop: 4, paddingTop: 6 }}>
+          <b>Выход</b>
+          <b>{msg.yield_grams} г</b>
+        </div>
+        {msg.done ? (
+          <div className="summary-remaining" style={{ marginTop: 8 }}>Готово ✓</div>
+        ) : (
+          <button className="btn btn-primary btn-block" style={{ marginTop: 10 }} onClick={() => onConfirm(msg)}>
+            Приготовить
+          </button>
+        )}
+      </div>
+    );
   }
 
   if (msg.kind === "report") {
@@ -103,6 +131,7 @@ export default function Chat({ onClose, onCommit }) {
     try {
       if (msg.kind === "eat") await api.logMeal(msg.items, "", msg.title);
       else if (msg.kind === "buy") await api.addInventory(msg.items);
+      else if (msg.kind === "cook") await api.cookFromChat(msg.name, msg.ingredients, msg.yield_grams);
       setMessages((m) => m.map((x) => (x.id === msg.id ? { ...x, done: true } : x)));
       onCommit?.();
     } catch (e) {

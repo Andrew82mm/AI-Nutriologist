@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from ..inventory import ledger
 from ..inventory.cooking import cook_dish
 from ..planner import suggest_recipes
-from ..products.meal_parse import parse_meal_text
+from ..products.meal_parse import parse_cook_text, parse_meal_text
 from ..products.models import Product
 from ..products.nutrition import resolve_nutrition
 from . import foods
@@ -423,6 +423,39 @@ def _resolve_llm_item(conn: sqlite3.Connection, it, llm) -> dict:
     return payload
 
 
+def _cook_response(conn: sqlite3.Connection, text: str) -> dict:
+    """«Приготовил <блюдо> из …» — preview a cooked dish (no commit).
+
+    Parses the dish + ingredient grams via the LLM and returns a preview card;
+    the frontend commits with POST /api/cook/from-chat, which consumes the
+    ingredients and stocks the dish. Read-only here (no products written).
+    """
+    llm = get_optional_llm()
+    if llm is None:
+        return {
+            "intent": "cook",
+            "text": "Чтобы записать готовку, настройте LLM в .env "
+            "(LLM_PROVIDER, LLM_API_KEY, ...).",
+        }
+    try:
+        parsed = parse_cook_text(text, llm)
+    except Exception:
+        parsed = None
+    if parsed is None or not parsed.name or not parsed.ingredients:
+        return {
+            "intent": "cook",
+            "text": "Не понял состав блюда. Напишите, например: «приготовил борщ: "
+            "свёкла 300г, картофель 200г, говядина 250г».",
+        }
+    total = sum(i.grams for i in parsed.ingredients)
+    return {
+        "intent": "cook",
+        "name": parsed.name,
+        "yield_grams": parsed.yield_grams if parsed.yield_grams else total,
+        "ingredients": [{"name": i.name, "grams": round(i.grams)} for i in parsed.ingredients],
+    }
+
+
 def _recipes_response(conn: sqlite3.Connection) -> dict:
     """«Что приготовить?» — real inventory-based suggestions when an LLM is set.
 
@@ -481,6 +514,9 @@ def chat(payload: ChatIn, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
     if intent == "report":
         day = diary_today(conn)
         return {"intent": "report", "report": day.model_dump()}
+
+    if intent == "cook":
+        return _cook_response(conn, text)
 
     if intent == "recipes":
         return _recipes_response(conn)
@@ -560,6 +596,50 @@ def cook(payload: CookRequest, conn: sqlite3.Connection = Depends(db_conn)) -> d
     ingredients = [
         (_load_product(conn, ing.product_id), ing.grams) for ing in payload.ingredients
     ]
+    dish = cook_dish(
+        conn, name=name, ingredients=ingredients,
+        yield_grams=payload.yield_grams, llm=get_optional_llm(),
+    )
+    return {"dish_id": dish.id, "name": dish.canonical_name}
+
+
+class CookByNameIngredient(BaseModel):
+    name: str
+    grams: float
+
+
+class CookFromChatRequest(BaseModel):
+    name: str
+    ingredients: list[CookByNameIngredient]
+    yield_grams: float | None = None
+
+
+@router.post("/cook/from-chat")
+def cook_from_chat(
+    payload: CookFromChatRequest, conn: sqlite3.Connection = Depends(db_conn)
+) -> dict:
+    """Commit a dish parsed from chat: resolve ingredients by name, then cook.
+
+    Unlike POST /api/cook (which takes product ids from the fridge form), this
+    resolves each ingredient name to a product get-or-create, so a dish can be
+    logged from free text even for products not yet on hand (they're consumed
+    into a negative balance, mirroring the manual cook form)."""
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="нужно название блюда")
+    if not payload.ingredients:
+        raise HTTPException(status_code=400, detail="нужен хотя бы один ингредиент")
+
+    ingredients = []
+    for ing in payload.ingredients:
+        ing_name = ing.name.strip()
+        if not ing_name:
+            continue
+        pid = ensure_product(conn, ing_name, None, "g")
+        ingredients.append((_load_product(conn, pid), ing.grams))
+    if not ingredients:
+        raise HTTPException(status_code=400, detail="нужен хотя бы один ингредиент")
+
     dish = cook_dish(
         conn, name=name, ingredients=ingredients,
         yield_grams=payload.yield_grams, llm=get_optional_llm(),

@@ -19,10 +19,12 @@ class RoutingFakeLLM:
         normalize: dict[str, Any] | None = None,
         nutrition: dict[str, Any] | None = None,
         meal: dict[str, Any] | None = None,
+        cook: dict[str, Any] | None = None,
     ):
         self._normalize = normalize
         self._nutrition = nutrition
         self._meal = meal
+        self._cook = cook
         self.calls: list[dict[str, Any]] = []
 
     def generate_json(
@@ -38,6 +40,10 @@ class RoutingFakeLLM:
             if self._meal is None:
                 raise AssertionError("unexpected meal-parse call")
             return self._meal
+        if "yield_grams" in props:
+            if self._cook is None:
+                raise AssertionError("unexpected cook-parse call")
+            return self._cook
         if "kcal" in props:
             if self._nutrition is None:
                 raise AssertionError("unexpected nutrition call")
@@ -91,3 +97,14 @@ def nutrition_response(
     *, kcal: float = 200.0, protein: float = 10.0, fat: float = 8.0, carbs: float = 20.0
 ) -> dict[str, Any]:
     return {"kcal": kcal, "protein": protein, "fat": fat, "carbs": carbs}
+
+
+def cook_response(
+    *, name: str, ingredients: list[dict[str, Any]], yield_grams: float | None = None
+) -> dict[str, Any]:
+    """Build a parse_cook_text-shaped response (name + ingredients + yield)."""
+    return {
+        "name": name,
+        "yield_grams": yield_grams,
+        "ingredients": [{"name": i["name"], "grams": i["grams"]} for i in ingredients],
+    }

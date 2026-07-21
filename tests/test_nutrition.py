@@ -90,3 +90,22 @@ def test_db_source_overwrites_prior_llm_estimate() -> None:
 
     kept = get_cached_nutrition(conn, product.id)
     assert kept.source == "db" and kept.kcal == 300.0
+
+
+class _RaisingLLM:
+    """A StructuredLLMClient whose calls always fail (timeout/rate-limit/etc.)."""
+
+    def generate_json(self, *, system, user, json_schema):
+        raise RuntimeError("simulated LLM failure (timeout/429)")
+
+
+def test_resolve_nutrition_is_resilient_to_llm_failure() -> None:
+    """A flaky LLM tier must not crash the resolver — an unresolved product just
+    returns None (best-effort), so multi-ingredient cooking doesn't 500."""
+    conn = get_connection(":memory:")
+    # Made-up name so the dataset misses and the (failing) LLM tier is reached.
+    product = _insert_product(conn, "зукерброд-выдуманный")
+
+    facts = resolve_nutrition(conn, product, llm=_RaisingLLM())
+
+    assert facts is None  # no crash, just unresolved

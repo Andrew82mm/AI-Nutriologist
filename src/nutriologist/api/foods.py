@@ -134,6 +134,10 @@ def parse_foods(text: str) -> list[ParsedFood]:
 
 # Intent detection, mirroring the prototype's buildResponse regexes.
 _RE_REPORT = re.compile(r"отчет|итог за|сколько.*съе")
+# Past-tense «я приготовил X» (record a cooked dish) — must be distinguished from
+# the infinitive «что приготовить?» (suggest recipes), which _RE_RECIPE catches.
+# Text is ё→е-normalized before matching, so use «испек»/«запек», not «испёк».
+_RE_COOK = re.compile(r"приготовил|сварил|пожарил|испек|запек|потушил|сделал блюдо|наготовил")
 _RE_RECIPE = re.compile(r"приготов|рецепт|что.*съесть|что.*есть|поужин.*что")
 _RE_BUY = re.compile(r"куп|прибрел|приобрел|взял|принес|закупил|запас")
 _RE_EAT = re.compile(r"съе|поел|ел |выпил|перекус|позавтрак|пообед|поужин|скушал|навернул|съест")
@@ -159,8 +163,11 @@ def detect_meal_title(text: str) -> str | None:
 
 
 def detect_intent(text: str) -> str:
-    """Classify a chat phrase: 'report' | 'recipes' | 'buy' | 'eat' | 'unknown'."""
+    """Classify a chat phrase: 'cook' | 'report' | 'recipes' | 'buy' | 'eat' | 'unknown'."""
     t = text.lower().replace("ё", "е")
+    # Cook is checked before recipes: «приготовил» would otherwise match _RE_RECIPE.
+    if _RE_COOK.search(t):
+        return "cook"
     if _RE_REPORT.search(t) and not _RE_RECIPE.search(t):
         return "report"
     if _RE_RECIPE.search(t):

@@ -111,6 +111,76 @@ def _coerce_category(value: Any) -> str | None:
     return value if value in CATEGORIES else None
 
 
+# --- cooking a dish («приготовил X из …») -----------------------------------
+COOK_SYSTEM_PROMPT = """\
+Пользователь сообщает, что приготовил блюдо. Разбери фразу:
+- name — название готового блюда в единственном числе («куриные бёдра в меду», \
+«борщ»).
+- ingredients — список сырых ингредиентов, каждый: name (обобщённый продукт) и \
+grams (в граммах). Переводи бытовые единицы в граммы: «столовая ложка масла» ≈ \
+17, «чайная ложка» ≈ 5, «стакан» ≈ 200, «кг» → ×1000, «л»/«литр» → ×1000. Если \
+количество не названо — оцени разумную величину.
+- yield_grams — вес готового блюда, если он назван в тексте; иначе null (тогда \
+вес посчитаем как сумму ингредиентов).
+
+Не придумывай ингредиенты, которых во фразе нет.
+"""
+
+COOK_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "yield_grams": {"type": ["number", "null"]},
+        "ingredients": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "grams": {"type": "number"},
+                },
+                "required": ["name", "grams"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    "required": ["name", "yield_grams", "ingredients"],
+    "additionalProperties": False,
+}
+
+
+@dataclass
+class CookIngredient:
+    name: str
+    grams: float
+
+
+@dataclass
+class ParsedCook:
+    name: str
+    yield_grams: float | None
+    ingredients: list[CookIngredient] = field(default_factory=list)
+
+
+def parse_cook_text(text: str, llm: StructuredLLMClient) -> ParsedCook:
+    """Parse «приготовил <dish> из <ingredients>» into a dish + ingredient list."""
+    data = llm.generate_json(
+        system=COOK_SYSTEM_PROMPT, user=text, json_schema=COOK_JSON_SCHEMA
+    )
+    ingredients: list[CookIngredient] = []
+    for raw in data.get("ingredients") or []:
+        name = (raw.get("name") or "").strip()
+        grams = raw.get("grams")
+        if not name or not grams or grams <= 0:
+            continue
+        ingredients.append(CookIngredient(name=name, grams=float(grams)))
+    return ParsedCook(
+        name=(data.get("name") or "").strip(),
+        yield_grams=data.get("yield_grams"),
+        ingredients=ingredients,
+    )
+
+
 def parse_meal_text(text: str, llm: StructuredLLMClient) -> ParsedMeal:
     """Parse `text` into an intent (eat/buy) and a list of food positions."""
     data = llm.generate_json(

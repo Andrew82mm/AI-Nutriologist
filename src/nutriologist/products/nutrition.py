@@ -173,7 +173,14 @@ def resolve_nutrition(
         sources.append(LLMEstimateSource(llm))
 
     for source in sources:
-        facts = source.lookup(product)
+        # A flaky source must not crash the caller: the LLM tier can time out,
+        # rate-limit, or return unparseable JSON, and nutrition is best-effort —
+        # a failure just means "unknown" (contribute 0), not a 500. This keeps
+        # multi-ingredient flows (cook_dish) and meal logging resilient.
+        try:
+            facts = source.lookup(product)
+        except Exception:
+            continue
         if facts is not None:
             if product.id is not None:
                 save_nutrition(conn, product.id, facts)
