@@ -38,7 +38,14 @@ class OpenAICompatibleStructuredClient:
     """Implements StructuredLLMClient via Chat Completions' response_format
     (json_schema mode)."""
 
-    def __init__(self, model: str, api_key: str | None = None, base_url: str | None = None):
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        timeout: float = 45.0,
+        max_retries: int = 1,
+    ):
         try:
             import openai
         except ImportError as exc:
@@ -47,7 +54,12 @@ class OpenAICompatibleStructuredClient:
                 'Install it with: pip install -e ".[llm-openai-compatible]"'
             ) from exc
 
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
+        # A bounded timeout matters: some models hang on strict structured-output
+        # requests. Without it the default is 600 s, so one flaky call would tie
+        # up the request for minutes (and callers silently fall back). Fail fast.
+        self._client = openai.OpenAI(
+            api_key=api_key, base_url=base_url, timeout=timeout, max_retries=max_retries
+        )
         self._model = model
 
     def generate_json(

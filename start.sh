@@ -19,6 +19,15 @@ if [ ! -d web/app/node_modules ]; then
   (cd web/app && npm install)
 fi
 
+# Освобождаем порты от прошлых запусков. Без этого новый бэкенд не займёт порт,
+# а старый процесс продолжит отдавать устаревший код/конфиг (например, старую
+# LLM_MODEL из .env, прочитанную при его запуске) — типичная причина «перезапустил,
+# а поведение не поменялось».
+for P in "$API_PORT" 5173; do
+  fuser -k "${P}/tcp" 2>/dev/null || true
+done
+sleep 1
+
 # при выходе гасим оба процесса
 cleanup() { kill "$API_PID" "$WEB_PID" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
