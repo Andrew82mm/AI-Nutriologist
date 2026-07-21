@@ -6,9 +6,10 @@ explicit call to `/api/meals` or `/api/inventory`. That mirrors the prototype's
 editable confirmation card and keeps side effects behind a deliberate user
 action.
 
-Product resolution here is name-based get-or-create (no LLM): the rule-based
-parser already yields canonical names, categories and per-100 macros for the
-staples it knows, which is enough to log meals and stock the fridge offline.
+Product resolution is name-based get-or-create. Chat parsing is hybrid: the
+rule-based parser yields canonical names, categories and per-100 macros for the
+staples it knows (offline, free), and an LLM fallback covers unknown foods when
+one is configured — see `chat()`.
 """
 
 from __future__ import annotations
@@ -20,10 +21,12 @@ from pydantic import BaseModel
 
 from ..inventory import ledger
 from ..inventory.cooking import cook_dish
+from ..planner import suggest_recipes
+from ..products.meal_parse import parse_meal_text
 from ..products.models import Product
 from ..products.nutrition import resolve_nutrition
 from . import foods
-from .app import db_conn
+from .app import db_conn, get_optional_llm
 from .diary import Macros, diary_today
 
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -261,7 +264,10 @@ def estimate_position(
         ).fetchone()
         if nrow:
             per100 = (nrow["kcal"] or 0, nrow["protein"] or 0, nrow["fat"] or 0, nrow["carbs"] or 0)
-    if per100 is None and staple:
+    # A staple's macros are only trusted on an *exact* name match: «творог 5%»
+    # gets the staple, but «творог обезжиренный» must not be coerced onto it —
+    # its variant is resolved through the cascade (dataset → LLM) on the full name.
+    if per100 is None and exact:
         per100 = tuple(staple.per100)
     if per100 is None:
         facts = resolve_nutrition(
@@ -269,6 +275,10 @@ def estimate_position(
         )
         if facts is not None:
             per100 = (facts.kcal or 0, facts.protein or 0, facts.fat or 0, facts.carbs or 0)
+    # Last resort (offline, nothing in the dataset): a coarse non-exact staple
+    # beats showing «?».
+    if per100 is None and staple is not None:
+        per100 = tuple(staple.per100)
 
     if unit == "piece":
         gpu = None
@@ -311,7 +321,7 @@ def estimate_position(
 @router.post("/meals/estimate")
 def estimate_meal(payload: EstimateIn, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
     """Preview unit + portion КБЖУ + fridge presence for each typed position."""
-    llm = _optional_llm()
+    llm = get_optional_llm()
     return {"items": [estimate_position(conn, it.name, it.amount, llm) for it in payload.items]}
 
 
@@ -365,9 +375,106 @@ def _item_payload(p: foods.ParsedFood) -> dict:
     }
 
 
+def _estimate_to_payload(est: dict) -> dict:
+    """Reshape an `estimate_position` result into the chat item payload shape.
+
+    Same keys as `_item_payload`, so LLM-resolved positions render and commit
+    through exactly the same frontend cards and `POST /api/meals`/`inventory`
+    paths as rule-based ones. Unknown macros (`known` is False) become zeros —
+    the confirmation card still lets the user edit them.
+    """
+    return {
+        "name": est["name"],
+        "grams": est["grams"],
+        "amount_canonical": est["amount_canonical"],
+        "unit": est["unit_label"],
+        "canonical_unit": est["canonical_unit"],
+        "category": est["category"],
+        "per100": est["per100"] or [0, 0, 0, 0],
+        "kcal": est["kcal"] or 0,
+        "protein": est["protein"] or 0,
+        "fat": est["fat"] or 0,
+        "carbs": est["carbs"] or 0,
+    }
+
+
+def _resolve_llm_item(conn: sqlite3.Connection, it, llm) -> dict:
+    """Resolve one LLM-parsed meal position to a chat item payload.
+
+    `it` is a `ParsedMealItem`. Its name/amount go through `estimate_position`
+    (unit + portion КБЖУ + fridge presence via the nutrition cascade). When the
+    phrase stated macros explicitly («хлеб с бжу 8,5 2,5 54»), those per-100 g
+    numbers win: they override the resolved nutrition and are tagged
+    `per100_source='user'`, so committing the meal teaches the product its macros.
+    """
+    payload = _estimate_to_payload(estimate_position(conn, it.name, it.amount, llm))
+    user = it.user_macros
+    if user is not None:
+        p, f, c = user
+        kcal100 = round(p * 4 + f * 9 + c * 4, 1)
+        grams = payload["grams"] or 0
+        k = grams / 100
+        payload["per100"] = [kcal100, p, f, c]
+        payload["per100_source"] = "user"
+        payload["kcal"] = round(kcal100 * k)
+        payload["protein"] = round(p * k, 1)
+        payload["fat"] = round(f * k, 1)
+        payload["carbs"] = round(c * k, 1)
+    return payload
+
+
+def _recipes_response(conn: sqlite3.Connection) -> dict:
+    """«Что приготовить?» — real inventory-based suggestions when an LLM is set.
+
+    Falls back to a plain hint (no hardcoded fake menu) when no LLM is configured
+    or the fridge is empty, so the chat degrades gracefully offline.
+    """
+    llm = get_optional_llm()
+    if llm is None:
+        return {
+            "intent": "recipes",
+            "text": "Чтобы подобрать рецепты из ваших продуктов, настройте LLM в .env "
+            "(LLM_PROVIDER, LLM_API_KEY, ...).",
+        }
+    try:
+        ideas = suggest_recipes(conn, llm)
+    except Exception:
+        ideas = []
+    if not ideas:
+        return {
+            "intent": "recipes",
+            "text": "Пока нечего предложить — добавьте продукты в холодильник.",
+        }
+    lines = []
+    for i in ideas:
+        line = f"• {i.name}"
+        if i.missing:
+            line += f" (нужно докупить: {', '.join(i.missing)})"
+        lines.append(line)
+    return {"intent": "recipes", "text": "Можно приготовить:\n" + "\n".join(lines)}
+
+
+def _eat_response(items: list[dict], title: str | None) -> dict:
+    total = Macros(
+        kcal=round(sum(i.get("kcal") or 0 for i in items)),
+        protein=round(sum(i.get("protein") or 0 for i in items)),
+        fat=round(sum(i.get("fat") or 0 for i in items)),
+        carbs=round(sum(i.get("carbs") or 0 for i in items)),
+    )
+    return {"intent": "eat", "items": items, "total": total.model_dump(), "title": title}
+
+
 @router.post("/chat")
 def chat(payload: ChatIn, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
-    """Parse a phrase and return a preview of the understood action (no commit)."""
+    """Parse a phrase and return a preview of the understood action (no commit).
+
+    Hybrid parsing, LLM-primary: when a model is configured it extracts *every*
+    position from the phrase — so mixed known+unknown foods and inline macros
+    («150г творог обезжиренный … 32г хлеба с бжу 8,5 2,5 54 …») are all captured.
+    The deterministic rule table (`foods`) is the offline fallback used only when
+    no LLM is set (or it returned nothing). The verb-based intent wins when it's
+    confident; otherwise we trust the LLM's eat/buy call.
+    """
     text = payload.text.strip()
     intent = foods.detect_intent(text)
 
@@ -376,30 +483,30 @@ def chat(payload: ChatIn, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
         return {"intent": "report", "report": day.model_dump()}
 
     if intent == "recipes":
-        return {
-            "intent": "recipes",
-            "text": "Судя по остаткам, можно приготовить: жаркое (картофель + говядина) "
-            "или творожную запеканку (творог + яйцо). Полное меню — на вкладке «План».",
-        }
+        return _recipes_response(conn)
 
+    # LLM-primary path: one call extracts the whole item list + intent.
+    llm = get_optional_llm()
+    if llm is not None:
+        try:
+            res = parse_meal_text(text, llm)
+        except Exception:
+            res = None
+        if res is not None and res.items:
+            # Verb-based intent wins when it decided; else trust the LLM's.
+            final_intent = intent if intent in ("buy", "eat") else res.intent
+            items = [_resolve_llm_item(conn, it, llm) for it in res.items]
+            if final_intent == "buy":
+                return {"intent": "buy", "items": items}
+            return _eat_response(items, foods.detect_meal_title(text))
+
+    # Offline (no LLM) or the model found no food → deterministic rule table.
     parsed = foods.parse_foods(text)
-
-    if intent == "buy" and parsed:
-        return {"intent": "buy", "items": [_item_payload(p) for p in parsed]}
-
-    if (intent == "eat" or parsed) and parsed:
-        total = Macros(
-            kcal=round(sum(p.kcal for p in parsed)),
-            protein=round(sum(p.protein for p in parsed)),
-            fat=round(sum(p.fat for p in parsed)),
-            carbs=round(sum(p.carbs for p in parsed)),
-        )
-        return {
-            "intent": "eat",
-            "items": [_item_payload(p) for p in parsed],
-            "total": total.model_dump(),
-            "title": foods.detect_meal_title(text),
-        }
+    if parsed:
+        items = [_item_payload(p) for p in parsed]
+        if intent == "buy":
+            return {"intent": "buy", "items": items}
+        return _eat_response(items, foods.detect_meal_title(text))
 
     return {
         "intent": "unknown",
@@ -435,16 +542,6 @@ def _load_product(conn: sqlite3.Connection, product_id: int) -> Product:
     )
 
 
-def _optional_llm():
-    """An LLM client if one is configured, else None (cooking works without it)."""
-    try:
-        from ..llm.config import load_llm_client_from_env
-
-        return load_llm_client_from_env()
-    except Exception:
-        return None
-
-
 @router.post("/cook")
 def cook(payload: CookRequest, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
     """Cook a dish: consume the chosen ingredients, stock the finished dish.
@@ -465,6 +562,6 @@ def cook(payload: CookRequest, conn: sqlite3.Connection = Depends(db_conn)) -> d
     ]
     dish = cook_dish(
         conn, name=name, ingredients=ingredients,
-        yield_grams=payload.yield_grams, llm=_optional_llm(),
+        yield_grams=payload.yield_grams, llm=get_optional_llm(),
     )
     return {"dish_id": dish.id, "name": dish.canonical_name}

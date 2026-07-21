@@ -18,9 +18,11 @@ class RoutingFakeLLM:
         *,
         normalize: dict[str, Any] | None = None,
         nutrition: dict[str, Any] | None = None,
+        meal: dict[str, Any] | None = None,
     ):
         self._normalize = normalize
         self._nutrition = nutrition
+        self._meal = meal
         self.calls: list[dict[str, Any]] = []
 
     def generate_json(
@@ -32,6 +34,10 @@ class RoutingFakeLLM:
             if self._normalize is None:
                 raise AssertionError("unexpected normalize call")
             return self._normalize
+        if "intent" in props:
+            if self._meal is None:
+                raise AssertionError("unexpected meal-parse call")
+            return self._meal
         if "kcal" in props:
             if self._nutrition is None:
                 raise AssertionError("unexpected nutrition call")
@@ -56,3 +62,32 @@ def normalize_response(
         "net_amount": net_amount,
         "net_unit": net_unit,
     }
+
+
+def meal_response(*, intent: str, items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build a parse_meal_text-shaped response.
+
+    Each item dict may set name/amount/unit/category and optional inline macros
+    protein_100/fat_100/carbs_100; sane defaults fill the rest.
+    """
+    return {
+        "intent": intent,
+        "items": [
+            {
+                "name": it["name"],
+                "amount": it.get("amount"),
+                "unit": it.get("unit", "g"),
+                "category": it.get("category", "прочее"),
+                "protein_100": it.get("protein_100"),
+                "fat_100": it.get("fat_100"),
+                "carbs_100": it.get("carbs_100"),
+            }
+            for it in items
+        ],
+    }
+
+
+def nutrition_response(
+    *, kcal: float = 200.0, protein: float = 10.0, fat: float = 8.0, carbs: float = 20.0
+) -> dict[str, Any]:
+    return {"kcal": kcal, "protein": protein, "fat": fat, "carbs": carbs}

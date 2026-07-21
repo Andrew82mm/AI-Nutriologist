@@ -36,6 +36,21 @@ def db_conn() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def get_optional_llm():
+    """An LLM client if one is configured in `.env`, else None.
+
+    Shared by every endpoint that treats the LLM as an optional enhancement
+    (chat parsing, receipt normalization, the planner): a missing/broken config
+    degrades to the deterministic offline path instead of erroring.
+    """
+    try:
+        from ..llm.config import load_llm_client_from_env
+
+        return load_llm_client_from_env()
+    except Exception:
+        return None
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="AI-Nutriologist API",
@@ -55,12 +70,15 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    from . import actions, diary, inventory, profile
+    from . import actions, diary, inventory, planner, profile, receipts_import, stats
 
     app.include_router(inventory.router)
     app.include_router(diary.router)
     app.include_router(profile.router)
     app.include_router(actions.router)
+    app.include_router(receipts_import.router)
+    app.include_router(planner.router)
+    app.include_router(stats.router)
 
     return app
 

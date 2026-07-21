@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 import nutriologist.llm.anthropic_client as anthropic_client_module
@@ -99,15 +101,25 @@ def test_openai_compatible_provider_forwards_all_args(monkeypatch: pytest.Monkey
     }
 
 
-def test_anthropic_not_installed_raises_actionable_import_error() -> None:
+def test_anthropic_not_installed_raises_actionable_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The real assertion here: without the optional dep installed, the
     config layer's error tells you exactly what to do — it doesn't leak an
-    unrelated traceback or silently pick a different provider."""
+    unrelated traceback or silently pick a different provider.
+
+    Force the missing-module condition deterministically (sys.modules[name]=None
+    makes `import name` raise ImportError), so the test holds whether or not the
+    optional SDK happens to be installed in the running environment."""
+    monkeypatch.setitem(sys.modules, "anthropic", None)
     with pytest.raises(ImportError, match="llm-anthropic"):
         load_llm_client_from_env(env={"LLM_PROVIDER": "anthropic"})
 
 
-def test_openai_compatible_not_installed_raises_actionable_import_error() -> None:
+def test_openai_compatible_not_installed_raises_actionable_import_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "openai", None)
     with pytest.raises(ImportError, match="llm-openai-compatible"):
         load_llm_client_from_env(
             env={"LLM_PROVIDER": "openai_compatible", "LLM_MODEL": "gpt-4o"}

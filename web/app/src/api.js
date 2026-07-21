@@ -28,14 +28,18 @@ export const api = {
   health: () => request("/health"),
   getInventory: () => request("/inventory"),
   getLastReceipt: () => request("/receipts/last"),
+  importReceipt: (path) => request("/receipts/import", { method: "POST", body: { path } }),
   inventoryAction: (productId, action) =>
     request(`/inventory/${productId}/action`, { method: "POST", body: { action } }),
   cook: (name, ingredients, yieldGrams) =>
     request("/cook", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams } }),
   getDiary: () => request("/diary/today"),
+  getStats: (days = 7) => request(`/stats?days=${days}`),
   getProfile: () => request("/profile"),
   putProfile: (profile) => request("/profile", { method: "PUT", body: profile }),
   chat: (text) => request("/chat", { method: "POST", body: { text } }),
+  planDay: () => request("/plan/day", { method: "POST" }),
+  suggestRecipes: () => request("/recipes/suggest", { method: "POST" }),
   logMeal: (items, rawText, title) =>
     request("/meals", { method: "POST", body: { items, raw_text: rawText, title } }),
   addInventory: (items) => request("/inventory", { method: "POST", body: { items } }),

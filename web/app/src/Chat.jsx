@@ -20,7 +20,7 @@ const INTRO = {
 // intro uses 'text'. Anything that isn't a card but carries `.text` is a bubble.
 function BotMessage({ msg, onConfirm }) {
   if (msg.kind !== "eat" && msg.kind !== "buy" && msg.kind !== "report" && msg.text) {
-    return <div className="bubble bubble-bot">{msg.text}</div>;
+    return <div className="bubble bubble-bot" style={{ whiteSpace: "pre-line" }}>{msg.text}</div>;
   }
 
   if (msg.kind === "report") {

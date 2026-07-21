@@ -14,7 +14,24 @@ imports the `openai` SDK — only this module.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
+
+_FENCE_RE = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.IGNORECASE)
+
+
+def _loads_lenient(content: str) -> dict[str, Any]:
+    """Parse JSON from a model response, tolerating two common wrappers.
+
+    Strict json_schema mode should return bare JSON, but weaker OpenAI-compatible
+    models (small/local ones) sometimes fence it in ```json ... ``` or append
+    trailing prose ("Extra data"). Strip the fences, then use `raw_decode` to take
+    the first JSON value and ignore any trailing text — so one flaky model doesn't
+    500 the whole request. A genuinely non-JSON response still raises.
+    """
+    text = _FENCE_RE.sub("", content.strip())
+    obj, _end = json.JSONDecoder().raw_decode(text)
+    return obj
 
 
 class OpenAICompatibleStructuredClient:
@@ -58,4 +75,4 @@ class OpenAICompatibleStructuredClient:
                 f"OpenAI-compatible response had empty content "
                 f"(finish_reason={response.choices[0].finish_reason})"
             )
-        return json.loads(content)
+        return _loads_lenient(content)

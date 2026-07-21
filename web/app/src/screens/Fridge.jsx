@@ -96,6 +96,70 @@ function AddProductForm({ onAdd, onCancel }) {
   );
 }
 
+function ImportReceiptForm({ onImported }) {
+  // Imports a receipt PDF by its path on the server (mail automation is a later
+  // iteration). On success the parent refetches inventory + the last-receipt banner.
+  const [open, setOpen] = useState(false);
+  const [path, setPath] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);
+
+  const submit = async () => {
+    if (!path.trim()) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const r = await api.importReceipt(path.trim());
+      setMsg({
+        ok: true,
+        text: r.duplicate
+          ? "Этот чек уже был импортирован."
+          : `Готово: +${r.items_posted} позиций из «${r.store_name || "чека"}».`,
+      });
+      if (!r.duplicate) onImported?.();
+    } catch (e) {
+      setMsg({ ok: false, text: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        className="btn btn-secondary btn-block"
+        style={{ gap: 8, borderStyle: "dashed" }}
+        onClick={() => setOpen(true)}
+      >
+        ↑ Импортировать чек
+      </button>
+    );
+  }
+
+  return (
+    <div className="meal-form card elev-sm">
+      <div className="meal-form-head">
+        <span className="meal-form-title">Импортировать чек (PDF)</span>
+        <button className="btn btn-icon btn-secondary" style={{ width: 32, height: 32 }} onClick={() => setOpen(false)} aria-label="Отмена">✕</button>
+      </div>
+      <input
+        className="input"
+        value={path}
+        onChange={(e) => setPath(e.target.value)}
+        placeholder="Путь к PDF на сервере, напр. /home/user/чек.pdf"
+      />
+      {msg && (
+        <div className="state-msg" style={{ padding: "6px 0", color: msg.ok ? undefined : "var(--color-danger, #c0392b)" }}>
+          {msg.text}
+        </div>
+      )}
+      <button className="btn btn-primary btn-block" onClick={submit} disabled={busy}>
+        {busy ? "Импорт…" : "Импортировать"}
+      </button>
+    </div>
+  );
+}
+
 function ProductCard({ item, onAction }) {
   // Eating is logged in the diary (which draws stock down); cooking lives in the
   // "add product or dish" form. The card is about stock, so it keeps only the
@@ -192,9 +256,12 @@ export default function Fridge({ reloadKey, onChanged }) {
           )}
         </>
       ) : (
-        <button className="btn btn-secondary btn-block" style={{ gap: 8, borderStyle: "dashed" }} onClick={() => setAdding("product")}>
-          + Добавить продукт или блюдо
-        </button>
+        <>
+          <button className="btn btn-secondary btn-block" style={{ gap: 8, borderStyle: "dashed" }} onClick={() => setAdding("product")}>
+            + Добавить продукт или блюдо
+          </button>
+          <ImportReceiptForm onImported={changed} />
+        </>
       )}
 
       {items.length === 0 ? (

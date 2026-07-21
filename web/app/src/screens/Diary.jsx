@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { IconChevronRight } from "../Icons";
 import MealForm from "../MealForm";
+import Stats from "./Stats";
 
 const MACROS = [
   ["Б", "protein", "var(--mc-b)"],
@@ -157,7 +158,7 @@ export default function Diary({ reloadKey, onOpenChat, onOpenFridge, onChanged }
       </div>
 
       {tab === "stats" ? (
-        <div className="state-msg">Статистика — скоро.</div>
+        <Stats />
       ) : error ? (
         <div className="state-msg">Ошибка загрузки: {error}</div>
       ) : day === null ? (
