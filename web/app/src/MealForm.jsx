@@ -91,16 +91,20 @@ export default function MealForm({ mode, initialItems, initialTitle, onSave, onD
     return () => clearTimeout(t);
   }, [key]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const startOverride = (r) =>
+  const startOverride = (r) => {
+    // Prefill with the product's per-100 g values (what the fields now expect),
+    // not the portion estimate.
+    const p = r.per100 || [null, null, null, null];
     setRow(r.id, {
       ov: {
         on: true,
-        kcal: r.kcal != null ? String(r.kcal) : "",
-        b: r.protein != null ? String(r.protein) : "",
-        zh: r.fat != null ? String(r.fat) : "",
-        u: r.carbs != null ? String(r.carbs) : "",
+        kcal: p[0] != null ? String(p[0]) : "",
+        b: p[1] != null ? String(p[1]) : "",
+        zh: p[2] != null ? String(p[2]) : "",
+        u: p[3] != null ? String(p[3]) : "",
       },
     });
+  };
 
   const submit = async () => {
     const items = [];
@@ -113,8 +117,9 @@ export default function MealForm({ mode, initialItems, initialTitle, onSave, onD
       let source = "db";
       const ovHas = r.ov.on && (r.ov.kcal || r.ov.b || r.ov.zh || r.ov.u);
       if (ovHas) {
-        const f = 100 / grams;
-        per100 = [num(r.ov.kcal) * f, num(r.ov.b) * f, num(r.ov.zh) * f, num(r.ov.u) * f];
+        // Hand-entered macros are per 100 g (like food labels) — stored as-is;
+        // the diary scales them to the portion by grams.
+        per100 = [num(r.ov.kcal), num(r.ov.b), num(r.ov.zh), num(r.ov.u)];
         source = "user";
       } else if (r.known && r.per100) {
         per100 = r.per100;
@@ -196,6 +201,9 @@ export default function MealForm({ mode, initialItems, initialTitle, onSave, onD
 
             {r.ov.on && (
               <div className="meal-form-nums">
+                <span className="meal-form-pos" style={{ flexBasis: "100%", marginBottom: 2 }}>
+                  КБЖУ на 100 г
+                </span>
                 {[["kcal", "ккал", 1.3], ["b", "Б", 1], ["zh", "Ж", 1], ["u", "У", 1]].map(([k, ph, flex]) => (
                   <input
                     key={k}

@@ -71,10 +71,11 @@ def ensure_nutrition(conn: sqlite3.Connection, product_id: int, per100: tuple) -
 def set_user_nutrition(conn: sqlite3.Connection, product_id: int, macros: tuple) -> None:
     """Overwrite a product's nutrition with hand-entered ('user') macros.
 
-    Used by the manual meal form, where the user types macros per position. We
-    store them as this product's per-100 profile and log the item at grams=100,
-    so the diary recomputes exactly the typed numbers. 'user' is the top-ranked
-    source, so this is the user deliberately defining the product's nutrition.
+    Used by the manual meal form and chat, where the user types macros per 100 g
+    (like a food label). We store them as this product's per-100 profile; the
+    meal item is logged at its actual grams and the diary scales the portion from
+    that. 'user' is the top-ranked source, so this is the user deliberately
+    defining the product's nutrition.
     """
     kcal, protein, fat, carbs = macros
     conn.execute(

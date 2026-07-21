@@ -254,7 +254,7 @@ body { margin: 0; font-family: var(--font-body); }
   padding: 2px;
   line-height: 1;
 }
-.meal-form-nums { display: flex; gap: 6px; }
+.meal-form-nums { display: flex; flex-wrap: wrap; gap: 6px; }
 .meal-form-num { min-height: 36px; text-align: center; padding-inline: 6px; }
 .meal-form-more { align-self: flex-start; gap: 6px; font-size: 13px; padding: 4px 6px; }
 .meal-form-actions { display: flex; gap: 8px; }
