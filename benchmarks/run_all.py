@@ -22,10 +22,7 @@ REPORT = Path(__file__).resolve().parent / "REPORT.md"
 def _summary(cov, rec, nut) -> str:
     """A one-glance table of headline numbers with Unicode bars."""
     rows = [
-        ["Парсинг чеков (детерм.)", f"{cov.receipts_deterministic}/{cov.receipts_total}",
-         pct(cov.receipts_deterministic, cov.receipts_total),
-         bar(cov.receipts_deterministic, cov.receipts_total)],
-        ["Фасовка регуляркой", f"{cov.packaging_hits}/{cov.names_total}",
+        ["Фасовка регуляркой (без LLM)", f"{cov.packaging_hits}/{cov.names_total}",
          pct(cov.packaging_hits, cov.names_total), bar(cov.packaging_hits, cov.names_total)],
         ["БЖУ из датасета (без LLM)", f"{cov.nutrition_dataset_hits}/{cov.nutrition_total}",
          pct(cov.nutrition_dataset_hits, cov.nutrition_total),
@@ -34,6 +31,8 @@ def _summary(cov, rec, nut) -> str:
          pct(len(rec.reconciled_in_store), len(rec.in_store)),
          bar(len(rec.reconciled_in_store), len(rec.in_store))],
     ]
+    routing = f"{cov.receipts_deterministic} правилами / {cov.receipts_total - cov.receipts_deterministic} через LLM"
+    rows.append(["Парсинг чеков (маршрутизация)", routing, "", ""])
     kcal_mae = "—"
     if nut.rows:
         from .bench_nutrition_llm import _metrics

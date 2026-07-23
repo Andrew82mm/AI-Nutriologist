@@ -23,20 +23,7 @@ from nutriologist.receipts import ofdru
 from nutriologist.receipts.pdf_text import extract_text
 
 from ._report import md_table, pct
-from .corpus import receipt_pdfs
-
-_CHAINS = [
-    ("лента", "Лента"), ("о'кей", "О'КЕЙ"), ("окей", "О'КЕЙ"),
-    ("магнит", "Магнит"), ("перекрёст", "Перекрёсток"), ("перекрест", "Перекрёсток"),
-]
-
-
-def _chain(filename: str) -> str:
-    low = filename.lower()
-    for key, label in _CHAINS:
-        if key in low:
-            return label
-    return "прочее"
+from .corpus import chain_of, receipt_pdfs
 
 
 @dataclass
@@ -61,7 +48,7 @@ def _parsing_coverage(res: CoverageResult) -> list[str]:
     raw_names: list[str] = []
     for pdf in receipt_pdfs():
         text = extract_text(pdf)
-        chain = _chain(pdf.name)
+        chain = chain_of(pdf.name)
         res.by_chain.setdefault(chain, [0, 0])
         res.by_chain[chain][1] += 1
         res.receipts_total += 1
@@ -114,32 +101,37 @@ def run() -> CoverageResult:
 
 def render(res: CoverageResult) -> str:
     det, tot = res.receipts_deterministic, res.receipts_total
-    chain_rows = [
-        [chain, f"{d}/{t}", pct(d, t)]
+    # Neutral routing view: how many receipts each path handles per chain.
+    route_rows = [
+        [chain, d, t - d]
         for chain, (d, t) in sorted(res.by_chain.items())
     ]
     split = " · ".join(f"{k}: {v}" for k, v in sorted(res.source_split.items())) or "—"
 
     return "\n".join([
-        "## #1 · Покрытие детерминизмом (без LLM)",
+        "## #1 · Разделение труда: правила против LLM",
         "",
-        "Доля работы, которую пайплайн делает бесплатными правилами до обращения к "
-        "платному LLM. Всё меряется без единого LLM-вызова.",
+        "Пайплайн — гибрид: сначала дешёвые детерминированные правила, платный LLM "
+        "только на промахе. Здесь — сколько работы делается бесплатно (всё меряется "
+        "**без единого LLM-вызова**).",
         "",
-        "**Парсинг чеков** — распознано детерминированным парсером OFD.RU: "
-        f"**{det}/{tot}** ({pct(det, tot)}). Остальное уходит в LLM-fallback "
-        "(другой layout письма/ОФД).",
+        "**Извлечение фасовки** — размер упаковки вытащен из названия позиции "
+        f"регуляркой: **{res.packaging_hits}/{res.names_total}** "
+        f"({pct(res.packaging_hits, res.names_total)}) без LLM (остальное — весовые "
+        "товары или нестандартные названия).",
         "",
-        md_table(["Сеть", "Детерминированно", "%"], chain_rows),
-        "",
-        "**Извлечение фасовки** — размер упаковки вытащен из названия регуляркой: "
-        f"**{res.packaging_hits}/{res.names_total}** ({pct(res.packaging_hits, res.names_total)}) "
-        "позиций без LLM (остальные — весовые или нестандартное название).",
-        "",
-        "**БЖУ** — покрытие доверенным датасетом (Скурихин + курируемая таблица + "
-        f"стаб), llm=None: **{res.nutrition_dataset_hits}/{res.nutrition_total}** "
+        "**БЖУ** — покрыто доверенным датасетом (Скурихин + курируемая таблица), "
+        f"llm=None: **{res.nutrition_dataset_hits}/{res.nutrition_total}** "
         f"({pct(res.nutrition_dataset_hits, res.nutrition_total)}) реальных продуктов "
-        f"резолвятся бесплатно. Историческое распределение источников в БД — {split}.",
+        f"— бесплатно. Историческое распределение источников БЖУ в БД: {split}.",
+        "",
+        "**Парсинг чеков — маршрутизация по формату (не метрика качества).** "
+        "Детерминированный парсер разбирает формат OFD.RU; чеки других сетей/шаблонов "
+        "сознательно уходят в LLM-fallback — отдельные парсеры под каждую сеть мы не "
+        f"пишем. Парсятся все {tot} чеков корпуса, разница только в цене: {det} "
+        f"бесплатно правилами, {tot - det} — через LLM.",
+        "",
+        md_table(["Сеть", "Правилами", "Через LLM"], route_rows),
     ])
 
 

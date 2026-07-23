@@ -7,7 +7,7 @@ they run in CI. The end-to-end runs happen locally via `python -m benchmarks.*`.
 
 from __future__ import annotations
 
-from benchmarks import bench_coverage, bench_nutrition_llm, bench_reconciliation
+from benchmarks import bench_nutrition_llm, bench_reconciliation, corpus
 from benchmarks._report import bar, md_table, money, pct
 
 
@@ -24,10 +24,10 @@ def test_report_helpers() -> None:
 
 
 def test_chain_detection() -> None:
-    assert bench_coverage._chain("Gmail - Кассовый чек ООО _Лента_ .pdf") == "Лента"
-    assert bench_coverage._chain("Чек от МАГНИТ.pdf") == "Магнит"
-    assert bench_coverage._chain("Перекрёсток 179.pdf") == "Перекрёсток"
-    assert bench_coverage._chain("что-то неизвестное.pdf") == "прочее"
+    assert corpus.chain_of("Gmail - Кассовый чек ООО _Лента_ .pdf") == "Лента"
+    assert corpus.chain_of("Чек от МАГНИТ.pdf") == "Магнит"
+    assert corpus.chain_of("Перекрёсток 179.pdf") == "Перекрёсток"
+    assert corpus.chain_of("что-то неизвестное.pdf") == "прочее"
 
 
 def test_reconciliation_render_handles_empty() -> None:
@@ -39,21 +39,21 @@ def test_reconciliation_render_handles_empty() -> None:
 
 
 def test_reconciliation_separates_online_from_defects() -> None:
-    R = bench_reconciliation.ReconRow
+    R = bench_reconciliation.ReconRow  # (store, fmt, total, items_total, delta, n, reconciled, online)
     rows = [
-        R("ok", "О'КЕЙ", "ofd_ru", 100.0, 100.0, 0.0, 5, True, online=False),
+        R("О'КЕЙ", "ofd_ru", 100.0, 100.0, 0.0, 5, True, online=False),
         # Online order: Σ products < ИТОГ by the delivery fee — expected, not a defect.
-        R("online", "Лента", "ofd_ru", 200.0, 110.0, -90.0, 6, False, online=True),
+        R("Лента-онлайн", "ofd_ru", 200.0, 110.0, -90.0, 6, False, online=True),
         # A true in-store mismatch — the only real defect.
-        R("defect", "Лента", "ofd_ru", 100.0, 91.0, -9.0, 4, False, online=False),
-        R("skip", "—", "needs_llm", None, None, None, 0, False),
+        R("Лента-дефект", "ofd_ru", 100.0, 91.0, -9.0, 4, False, online=False),
+        R("Магнит", "needs_llm", None, None, None, 0, False),
     ]
     res = bench_reconciliation.ReconResult(rows=rows)
     assert len(res.parsed) == 3               # needs_llm excluded
     assert len(res.in_store) == 2             # online excluded from the clean signal
     assert len(res.reconciled_in_store) == 1
-    assert [r.label for r in res.mismatches] == ["defect"]   # online is NOT a defect
-    assert [r.label for r in res.online] == ["online"]
+    assert [r.store for r in res.mismatches] == ["Лента-дефект"]  # online is NOT a defect
+    assert [r.store for r in res.online] == ["Лента-онлайн"]
     assert res.mean_abs_delta_in_store == 4.5  # (0 + 9) / 2, online excluded
     assert bench_reconciliation._status(rows[1]) == "≈ сбор/доставка"
 

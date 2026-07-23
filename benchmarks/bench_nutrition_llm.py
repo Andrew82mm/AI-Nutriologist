@@ -1,18 +1,19 @@
 """Benchmark #3 — how far LLM БЖУ estimates drift from the trusted dataset.
 
-The nutrition resolver prefers the Скурихин dataset and only falls back to an
-LLM estimate. This benchmark quantifies *why*: for a random sample of dataset
-products we also ask the LLM (by name), then measure its error against the
-dataset value (MAE + MAPE per macro). A large drift justifies dataset-first.
+The nutrition resolver prefers the dataset and only falls back to an LLM estimate.
+This benchmark quantifies *why*: for a set of **common, recognisable** grocery
+products (the project's curated table — гречка, творог 5%, куриное филе, …) we
+ask the LLM for БЖУ by name and measure its error against the curated value
+(MAE + MAPE per macro). Using recognisable products keeps the comparison fair
+and interpretable — no obscure single-word dataset entries the LLM can't place.
 
-The LLM sample is cached to results/nutrition_llm_vs_dataset.csv so the report
+The LLM answers are cached to results/nutrition_llm_vs_dataset.csv so the report
 renders offline; pass refresh=True (or `--refresh`) to re-query the model.
 """
 
 from __future__ import annotations
 
 import csv
-import random
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -25,8 +26,6 @@ from ._report import md_table
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 CACHE = RESULTS_DIR / "nutrition_llm_vs_dataset.csv"
-SAMPLE_SIZE = 30
-SEED = 12
 _MACROS = ["kcal", "protein", "fat", "carbs"]
 _MACRO_RU = {"kcal": "ккал", "protein": "белки", "fat": "жиры", "carbs": "углеводы"}
 
@@ -45,15 +44,14 @@ class NutResult:
     from_cache: bool = False
 
 
-def _sample_dataset(n: int) -> list:
-    """Random Скурихин rows with all four macros present (deterministic seed)."""
-    rows = [
+def _test_set() -> list:
+    """The curated common-product rows — recognisable names, verified БЖУ."""
+    return [
         r for r in load_dataset()
-        if r.source_ref.startswith("skurikhin:")
+        if r.source_ref.startswith("curated:")
         and None not in (r.kcal, r.protein, r.fat, r.carbs)
         and (r.kcal or 0) > 0
     ]
-    return random.Random(SEED).sample(rows, min(n, len(rows)))
 
 
 def _load_cache() -> list[NutRow]:
@@ -77,7 +75,7 @@ def _write_cache(rows: list[NutRow]) -> None:
             w.writerow([r.name] + [r.ds[m] for m in _MACROS] + [r.llm[m] for m in _MACROS])
 
 
-def run(refresh: bool = False, sample_size: int = SAMPLE_SIZE) -> NutResult:
+def run(refresh: bool = False) -> NutResult:
     if CACHE.exists() and not refresh:
         return NutResult(rows=_load_cache(), from_cache=True)
 
@@ -90,7 +88,7 @@ def run(refresh: bool = False, sample_size: int = SAMPLE_SIZE) -> NutResult:
 
     source = LLMEstimateSource(llm)
     rows: list[NutRow] = []
-    for ds_row in _sample_dataset(sample_size):
+    for ds_row in _test_set():
         try:
             facts = source.lookup(Product(canonical_name=ds_row.name, is_food=True, canonical_unit="g"))
         except Exception:
@@ -120,7 +118,7 @@ def _metrics(rows: list[NutRow]) -> dict[str, tuple[float, float]]:
 
 
 def render(res: NutResult) -> str:
-    head = "## #3 · Ошибка LLM-оценки БЖУ против Скурихина"
+    head = "## #3 · Ошибка LLM-оценки БЖУ против справочника"
     if res.skipped:
         return f"{head}\n\n_{res.skipped}_"
     if not res.rows:
@@ -143,14 +141,17 @@ def render(res: NutResult) -> str:
     )
     return "\n".join([
         head, "",
-        f"Выборка: **{len(res.rows)}** продуктов из Скурихина; для каждого спросили "
-        f"у LLM оценку по названию и сравнили с датасетом.{note}",
+        f"Тест-сет: **{len(res.rows)}** распространённых продуктов (курируемая таблица — "
+        f"узнаваемые названия вроде «гречка», «творог 5%», «куриное филе»). Для каждого "
+        f"спросили у LLM оценку БЖУ по названию и сравнили с выверенным значением.{note}",
         "", table, "",
-        "Крупнейшие промахи по калориям:", "", examples, "",
-        "MAE — надёжный показатель; MAPE по белкам/жирам раздут продуктами с малым "
-        "значением макроса (деление на ≈0), поэтому смотрим прежде всего на MAE. "
-        "Ощутимая ошибка (≈40 ккал и ≈5.6 г жиров на 100 г) подтверждает решение "
-        "резолвера брать датасет первым, а LLM — только как последний резерв.",
+        "Крупнейшие расхождения по калориям:", "", examples, "",
+        f"На узнаваемых продуктах LLM в среднем неплох (MAE {met['kcal'][0]:g} ккал/100 г), "
+        "но расхождения растут на неоднозначных названиях: «рис» — сухой (датасет) против "
+        "варёного (LLM), «курица» — с кожей или без. Это и есть довод за dataset-first: "
+        "справочник даёт бесплатные, воспроизводимые числа с фиксированным определением "
+        "продукта, а не оценку с плавающей трактовкой. MAPE вторичен (раздувается на "
+        "продуктах с малым значением макроса) — опираемся на MAE.",
     ])
 
 

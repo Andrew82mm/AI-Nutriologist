@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from nutriologist.receipts.parse import UnsupportedReceiptFormat, parse_receipt_pdf
 
 from ._report import md_table, money, pct
-from .corpus import receipt_pdfs
+from .corpus import chain_of, receipt_pdfs
 
 TOLERANCE = 0.01  # ₽ — a kopeck of rounding is fine
 
@@ -29,8 +29,7 @@ _ONLINE_MARKERS = ("сборка заказа", "доставк", "самовы�
 
 @dataclass
 class ReconRow:
-    label: str
-    store: str
+    store: str               # retail chain — the receipt's identity in the table
     fmt: str
     total: float | None
     items_total: float | None
@@ -72,10 +71,14 @@ class ReconResult:
         return round(sum(deltas) / len(deltas), 2) if deltas else None
 
 
-def _short(name: str) -> str:
-    """Trim the noisy Gmail export filename to something readable."""
-    stem = name.removeprefix("Gmail - ").removeprefix("Gmail").removesuffix(".pdf")
-    return stem.strip(" -.")[:40] or name
+def _store_label(store_name: str | None, filename: str) -> str:
+    """Compact chain label (drops the «ООО "…"» wrapper); filename as fallback."""
+    if store_name:
+        for key in ("Лента", "О'КЕЙ", "Магнит", "Перекрёсток"):
+            if key.lower() in store_name.lower():
+                return key
+        return store_name
+    return chain_of(filename)
 
 
 def run(tolerance: float = TOLERANCE) -> ReconResult:
@@ -84,7 +87,7 @@ def run(tolerance: float = TOLERANCE) -> ReconResult:
         try:
             r = parse_receipt_pdf(pdf)
         except UnsupportedReceiptFormat:
-            res.rows.append(ReconRow(_short(pdf.name), "—", "needs_llm", None, None, None, 0, False))
+            res.rows.append(ReconRow(chain_of(pdf.name), "needs_llm", None, None, None, 0, False))
             continue
         it = r.items_total
         delta = round(it - r.total, 2) if r.total is not None else None
@@ -92,8 +95,7 @@ def run(tolerance: float = TOLERANCE) -> ReconResult:
         online = any(m in r.raw_text.lower() for m in _ONLINE_MARKERS)
         res.rows.append(
             ReconRow(
-                label=_short(pdf.name),
-                store=(r.store_name or "—"),
+                store=_store_label(r.store_name, pdf.name),
                 fmt=r.source_format,
                 total=r.total,
                 items_total=it,
@@ -132,15 +134,14 @@ def render(res: ReconResult) -> str:
         f"(покрытие меряет #1).",
         "",
         md_table(
-            ["Чек", "Сеть", "Тип", "Позиций", "ИТОГ", "Σ позиций", "Δ, ₽", "Статус"],
+            ["Сеть", "Тип", "Позиций", "ИТОГ", "Σ позиций", "Δ, ₽", "Статус"],
             [
                 [
-                    r.label, r.store,
-                    ("онлайн" if r.online else "офлайн") if r.fmt != "needs_llm" else "—",
+                    r.store, "онлайн" if r.online else "офлайн",
                     r.n_items, money(r.total), money(r.items_total), money(r.delta),
                     _status(r),
                 ]
-                for r in res.rows
+                for r in res.parsed  # only parsed receipts; the rest belong to #1
             ],
         ),
         "",
