@@ -9,6 +9,7 @@ again. The shopping list is then plan-need minus what's already in the fridge.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -24,6 +25,10 @@ _UNIT_LABEL = {"g": "г", "ml": "мл", "piece": "шт"}
 _TOLERANCE = 0.15
 
 _DEFAULT_GOAL = (2200.0, 150.0, 70.0, 250.0)  # kcal, protein, fat, carbs
+
+# Meal titles that carry no dish info — for these we fall back to the main
+# ingredient when summarising what was recently eaten.
+_SLOT_TITLES = {"Завтрак", "Обед", "Ужин", "Перекус", "Приём пищи"}
 
 
 @dataclass
@@ -113,6 +118,12 @@ _SYSTEM_PROMPT = """\
 По возможности используй продукты из холодильника и ориентируйся на цель по \
 калориям и белку. Если среди сохранённых рецептов есть подходящий под приём и \
 цель — используй его: верни то же название (dish), те же ингредиенты и шаги.
+
+ВАЖНО: строго соблюдай ограничения и предпочтения пользователя, если они заданы \
+— не включай в план запрещённые или нежелательные продукты (учитывай синонимы: \
+«без рыбы» — исключить любую рыбу и морепродукты). Если пользователь уже ел \
+что-то на этой неделе, по возможности не повторяй эти блюда и основные продукты \
+— предлагай разнообразие.
 """
 
 
@@ -130,6 +141,59 @@ def _load_goal(conn: sqlite3.Connection) -> tuple[float, float, float, float]:
         row["daily_fat_goal"] or df,
         row["daily_carbs_goal"] or dc,
     )
+
+
+def _load_restrictions(conn: sqlite3.Connection) -> list[str]:
+    """User's dietary restrictions/preferences from the profile (may be empty).
+
+    Stored as a JSON array in `user_profile.restrictions`; legacy rows may hold
+    free comma-separated text, so fall back to splitting on commas.
+    """
+    row = conn.execute(
+        "SELECT restrictions FROM user_profile ORDER BY id LIMIT 1"
+    ).fetchone()
+    if row is None or not row["restrictions"]:
+        return []
+    try:
+        val = json.loads(row["restrictions"])
+    except (json.JSONDecodeError, TypeError):
+        val = row["restrictions"]
+    if isinstance(val, list):
+        return [str(s).strip() for s in val if str(s).strip()]
+    return [s.strip() for s in str(val).split(",") if s.strip()]
+
+
+def _recent_meals(conn: sqlite3.Connection, days: int = 7, limit: int = 15) -> list[str]:
+    """Dishes/main products eaten in the last `days` days, newest first.
+
+    A variety signal for the planner: for each recent meal we take its custom
+    dish title, or — when it's just a time-slot label — the heaviest ingredient
+    (the meal's «main»). Deduplicated, order preserved.
+    """
+    rows = conn.execute(
+        """
+        SELECT m.title AS title,
+               (SELECT p.canonical_name FROM meal_items mi
+                JOIN products p ON p.id = mi.product_id
+                WHERE mi.meal_id = m.id
+                ORDER BY mi.grams DESC LIMIT 1) AS main
+        FROM meals m
+        WHERE m.ts >= datetime('now', 'localtime', ?)
+        ORDER BY m.ts DESC
+        LIMIT 100
+        """,
+        (f"-{days} days",),
+    ).fetchall()
+
+    out: list[str] = []
+    for r in rows:
+        title = (r["title"] or "").strip()
+        label = title if title and title not in _SLOT_TITLES else (r["main"] or "").strip()
+        if label and label not in out:
+            out.append(label)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _inventory_names(conn: sqlite3.Connection) -> dict[str, sqlite3.Row]:
@@ -269,10 +333,27 @@ def generate_day_plan(conn: sqlite3.Connection, llm: StructuredLLMClient) -> Day
             f"- {r['name']} (из: {', '.join(r['ingredients']) or '—'})" for r in saved
         )
         saved_block = f"\nСохранённые рецепты (переиспользуй подходящие):\n{lines}"
+
+    restrictions = _load_restrictions(conn)
+    restrictions_block = ""
+    if restrictions:
+        restrictions_block = (
+            f"\nОграничения и предпочтения (обязательно соблюдай, не включай эти "
+            f"продукты): {', '.join(restrictions)}."
+        )
+
+    recent = _recent_meals(conn)
+    recent_block = ""
+    if recent:
+        recent_block = (
+            f"\nУже ели на этой неделе (по возможности не повторяй, дай "
+            f"разнообразие): {', '.join(recent)}."
+        )
+
     user = (
         f"Цель на день: {goal['kcal']:g} ккал, белки {goal['protein']:g} г, "
         f"жиры {goal['fat']:g} г, углеводы {goal['carbs']:g} г.\n"
-        f"Есть дома: {fridge}.{saved_block}"
+        f"Есть дома: {fridge}.{restrictions_block}{recent_block}{saved_block}"
     )
     data = llm.generate_json(system=_SYSTEM_PROMPT, user=user, json_schema=_PLAN_SCHEMA)
     meals, totals = _recompute(conn, data.get("meals") or [], llm)

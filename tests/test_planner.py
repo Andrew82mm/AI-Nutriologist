@@ -23,11 +23,13 @@ class PlanFakeLLM:
         self._recipes = recipes
         self._nutrition = nutrition_by_name or {}
         self.plan_calls = 0
+        self.plan_prompts: list[str] = []  # user prompts seen on the plan schema
 
     def generate_json(self, *, system: str, user: str, json_schema: dict[str, Any]):
         props = json_schema.get("properties", {})
         if "meals" in props:
             self.plan_calls += 1
+            self.plan_prompts.append(user)
             return self._plans.pop(0) if self._plans else {"meals": []}
         if "recipes" in props:
             return self._recipes or {"recipes": []}
@@ -50,6 +52,28 @@ def _add_stock(conn, name, grams, unit="g"):
 def _set_goal(conn, kcal):
     conn.execute("INSERT INTO user_profile (daily_kcal_goal) VALUES (?)", (kcal,))
     conn.commit()
+
+
+def _log_meal(conn, product_name, grams, title=None):
+    """Record a meal eaten «now» (product created if missing) — for history tests."""
+    row = conn.execute(
+        "SELECT id FROM products WHERE canonical_name = ?", (product_name,)
+    ).fetchone()
+    pid = row["id"] if row else conn.execute(
+        "INSERT INTO products (canonical_name, is_food, canonical_unit) VALUES (?, 1, 'g')",
+        (product_name,),
+    ).lastrowid
+    mid = conn.execute(
+        "INSERT INTO meals (ts, raw_text, title) VALUES (datetime('now', 'localtime'), ?, ?)",
+        (product_name, title),
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO meal_items (meal_id, product_id, grams, grams_source) "
+        "VALUES (?, ?, ?, 'user')",
+        (mid, pid, grams),
+    )
+    conn.commit()
+    return mid
 
 
 # Made-up product names, so the nutrition cascade misses the real РФ dataset
@@ -112,6 +136,43 @@ def test_day_plan_runs_one_correction_pass_when_far_from_goal() -> None:
     assert plan.adjusted is True
     assert llm.plan_calls == 2
     assert plan.totals["kcal"] == 3500  # from the corrected (big) menu
+
+
+def test_day_plan_passes_restrictions_to_llm() -> None:
+    conn = get_connection(":memory:")
+    conn.execute(
+        "INSERT INTO user_profile (daily_kcal_goal, restrictions) VALUES (?, ?)",
+        (2000, json.dumps(["Без рыбы", "Без арахиса"], ensure_ascii=False)),
+    )
+    conn.commit()
+    menu = {"meals": [{"title": "Обед", "dish": "Каша", "steps": [],
+                       "ingredients": [{"name": "гречка", "grams": 100}]}]}
+    # Two identical responses so a correction pass (goal 2000 vs tiny menu) still resolves.
+    llm = PlanFakeLLM(plan_responses=[menu, menu], nutrition_by_name={"гречка": (330, 12, 3, 68)})
+
+    generate_day_plan(conn, llm)
+
+    assert llm.plan_prompts, "planner must call the LLM at least once"
+    # Restrictions reach the prompt — including the correction pass.
+    assert all("Без рыбы" in p and "Без арахиса" in p for p in llm.plan_prompts)
+
+
+def test_day_plan_passes_recent_meals_to_llm() -> None:
+    conn = get_connection(":memory:")
+    _set_goal(conn, 330)
+    _log_meal(conn, "борщ", 400, title="Борщ")   # custom dish title → used as-is
+    _log_meal(conn, "гречка", 150)               # slot title (None) → main ingredient
+
+    menu = {"meals": [{"title": "Обед", "dish": "Салат", "steps": [],
+                       "ingredients": [{"name": "огурец", "grams": 100}]}]}
+    llm = PlanFakeLLM(plan_responses=[menu, menu], nutrition_by_name={"огурец": (15, 0.8, 0.1, 3)})
+
+    generate_day_plan(conn, llm)
+
+    prompt = llm.plan_prompts[0]
+    assert "Уже ели" in prompt
+    assert "Борщ" in prompt      # custom title of a recent meal
+    assert "гречка" in prompt    # main ingredient stands in for a slot-titled meal
 
 
 def test_cook_stores_steps_and_plan_reuses_saved_recipe() -> None:
