@@ -46,6 +46,9 @@ export const api = {
   chat: (text) => request("/chat", { method: "POST", body: { text } }),
   planDay: () => request("/plan/day", { method: "POST" }),
   suggestRecipes: () => request("/recipes/suggest", { method: "POST" }),
+  // «Мои рецепты» — saved recipes (created when dishes are cooked).
+  getRecipes: () => request("/recipes"),
+  deleteRecipe: (id) => request(`/recipes/${id}`, { method: "DELETE" }),
   logMeal: (items, rawText, title) =>
     request("/meals", { method: "POST", body: { items, raw_text: rawText, title } }),
   addInventory: (items) => request("/inventory", { method: "POST", body: { items } }),

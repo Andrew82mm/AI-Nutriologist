@@ -1,13 +1,15 @@
-// Plan (План) — a day of recipes + a shopping list, from goals and inventory
-// via POST /api/plan/day. Each meal is a dish with ingredients and cooking
-// steps; БЖУ is the backend's deterministic recompute (not the LLM's math).
-// «Приготовить» cooks a recipe through the shared cook flow (consumes the
-// ingredients, stocks the dish, saves the recipe to the base). Needs an LLM in
-// .env — a 422 surfaces as a hint. Generation is on demand (it costs a call).
+// Plan (План) — two views behind a toggle at the top:
+//   • «План на день» — a day of recipes + a shopping list, from goals and
+//     inventory via POST /api/plan/day. БЖУ is the backend's deterministic
+//     recompute (not the LLM's math). «Приготовить» cooks a recipe through the
+//     shared cook flow (consumes ingredients, stocks the dish, saves the recipe).
+//   • «Мои рецепты» — the saved-recipe library (GET /api/recipes): every dish
+//     ever cooked, with ingredients, steps and БЖУ. Cook again or delete.
+// Plan generation needs an LLM in .env — a 422 surfaces as a hint.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api";
-import { IconChevronRight } from "../Icons";
+import { IconChevronRight, IconTrash } from "../Icons";
 
 const round = (x) => Math.round(x || 0);
 const catLabel = (c) => (c || "прочее").toUpperCase();
@@ -21,6 +23,39 @@ const IconPan = () => (
   </svg>
 );
 
+// Collapsible cooking steps — shared by planned and saved recipe cards.
+function RecipeSteps({ steps }) {
+  const [open, setOpen] = useState(false);
+  if (!steps || steps.length === 0) return null;
+  return (
+    <div>
+      <button className={"recipe-toggle" + (open ? " is-open" : "")} onClick={() => setOpen((o) => !o)}>
+        <IconChevronRight size={12} />
+        {open ? "Скрыть рецепт" : "Показать рецепт"}
+      </button>
+      {open && (
+        <ol className="recipe-steps">
+          {steps.map((s, i) => <li key={i}>{s}</li>)}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+// The «Приготовить / Готовлю… / Приготовлено ✓» button (shared).
+function CookButton({ status, onClick }) {
+  return (
+    <button
+      className={"btn btn-block btn-cook" + (status === "done" ? " is-done" : "")}
+      style={{ marginTop: 10 }}
+      disabled={status === "busy" || status === "done"}
+      onClick={onClick}
+    >
+      {status === "done" ? "Приготовлено ✓" : status === "busy" ? "Готовлю…" : (<><IconPan /> Приготовить</>)}
+    </button>
+  );
+}
+
 function MealTag({ have }) {
   return (
     <span className={"tag " + (have ? "tag-accent-2" : "tag-neutral")}>
@@ -30,7 +65,6 @@ function MealTag({ have }) {
 }
 
 function RecipeCard({ meal, have, status, onCook }) {
-  const [open, setOpen] = useState(false);
   const kcal = round(meal.items.reduce((s, it) => s + (it.kcal || 0), 0));
   const p = round(meal.items.reduce((s, it) => s + (it.protein || 0), 0));
   const f = round(meal.items.reduce((s, it) => s + (it.fat || 0), 0));
@@ -62,46 +96,118 @@ function RecipeCard({ meal, have, status, onCook }) {
         <MealTag have={have} />
       </div>
 
-      {meal.steps.length > 0 && (
-        <div>
-          <button
-            className={"recipe-toggle" + (open ? " is-open" : "")}
-            onClick={() => setOpen((o) => !o)}
-          >
-            <IconChevronRight size={12} />
-            {open ? "Скрыть рецепт" : "Показать рецепт"}
-          </button>
-          {open && (
-            <ol className="recipe-steps">
-              {meal.steps.map((s, i) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ol>
-          )}
-        </div>
-      )}
-
-      <button
-        className={"btn btn-block btn-cook" + (status === "done" ? " is-done" : "")}
-        style={{ marginTop: 10 }}
-        disabled={status === "busy" || status === "done"}
-        onClick={() => onCook(meal)}
-      >
-        {status === "done" ? (
-          "Приготовлено ✓"
-        ) : status === "busy" ? (
-          "Готовлю…"
-        ) : (
-          <>
-            <IconPan /> Приготовить
-          </>
-        )}
-      </button>
+      <RecipeSteps steps={meal.steps} />
+      <CookButton status={status} onClick={() => onCook(meal)} />
     </div>
   );
 }
 
-export default function Plan() {
+function SavedRecipeCard({ recipe, status, onCook, onDelete }) {
+  const ingredients = recipe.ingredients.map((i) => `${i.name} ${round(i.grams)} г`).join(" · ");
+  const totalKcal = round((recipe.kcal || 0) * (recipe.yield_grams || 0) / 100);
+
+  return (
+    <div className="card elev-sm meal-card" style={{ marginTop: 12 }}>
+      <div className="meal-head" style={{ alignItems: "center" }}>
+        <span style={{ fontWeight: 600, fontSize: 16, flex: 1 }}>{recipe.name}</span>
+        {recipe.kcal > 0 && <span className="meal-kcal">{round(recipe.kcal)} ккал/100 г</span>}
+        <button
+          className="product-trash"
+          style={{ marginLeft: 6 }}
+          title="Удалить рецепт"
+          onClick={() => onDelete(recipe)}
+        >
+          <IconTrash size={17} />
+        </button>
+      </div>
+
+      <div className="meal-items">{ingredients || "—"}</div>
+
+      <div className="meal-items">
+        {recipe.kcal > 0
+          ? `Б ${round(recipe.protein)} · Ж ${round(recipe.fat)} · У ${round(recipe.carbs)} · всё блюдо ≈ ${totalKcal} ккал (${round(recipe.yield_grams)} г)`
+          : "БЖУ не рассчитан"}
+      </div>
+
+      <RecipeSteps steps={recipe.steps} />
+      <CookButton status={status} onClick={() => onCook(recipe)} />
+    </div>
+  );
+}
+
+// ── «Мои рецепты» view ──────────────────────────────────────────────────────
+function MyRecipes() {
+  const [recipes, setRecipes] = useState(null);
+  const [error, setError] = useState(null);
+  const [cookState, setCookState] = useState({}); // recipe id -> 'busy' | 'done'
+
+  const load = async () => {
+    setError(null);
+    try {
+      setRecipes(await api.getRecipes());
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const cook = async (recipe) => {
+    setCookState((s) => ({ ...s, [recipe.id]: "busy" }));
+    try {
+      await api.cookFromChat(
+        recipe.name,
+        recipe.ingredients.map((i) => ({ name: i.name, grams: i.grams })),
+        recipe.yield_grams,
+        recipe.steps,
+      );
+      setCookState((s) => ({ ...s, [recipe.id]: "done" }));
+    } catch (e) {
+      setCookState((s) => ({ ...s, [recipe.id]: undefined }));
+      setError("Не удалось приготовить: " + e.message);
+    }
+  };
+
+  const remove = async (recipe) => {
+    if (!window.confirm(`Удалить рецепт «${recipe.name}»? Приготовленное блюдо и его остатки останутся.`)) return;
+    try {
+      await api.deleteRecipe(recipe.id);
+      setRecipes((rs) => rs.filter((r) => r.id !== recipe.id));
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  if (recipes === null && !error) return <div className="state-msg">Загрузка…</div>;
+
+  return (
+    <div>
+      {error && <div className="state-msg" style={{ marginTop: 4 }}>Не удалось: {error}</div>}
+      {recipes && recipes.length === 0 ? (
+        <div className="card empty-card" style={{ marginTop: 12 }}>
+          <div className="empty-title">Пока нет рецептов</div>
+          <div className="empty-sub">
+            Приготовьте блюдо — на экране «План», в холодильнике или через чат
+            («приготовил омлет из …»), — и оно сохранится сюда.
+          </div>
+        </div>
+      ) : (
+        (recipes || []).map((r) => (
+          <SavedRecipeCard
+            key={r.id}
+            recipe={r}
+            status={cookState[r.id]}
+            onCook={cook}
+            onDelete={remove}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+// ── «План на день» view ─────────────────────────────────────────────────────
+function DayPlanView() {
   const [plan, setPlan] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -264,6 +370,31 @@ export default function Plan() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+export default function Plan() {
+  const [tab, setTab] = useState("plan");
+
+  return (
+    <div>
+      <div className="seg-ctl" style={{ marginBottom: 12 }}>
+        <button
+          className={"seg-ctl-btn" + (tab === "plan" ? " is-on" : "")}
+          onClick={() => setTab("plan")}
+        >
+          План на день
+        </button>
+        <button
+          className={"seg-ctl-btn" + (tab === "recipes" ? " is-on" : "")}
+          onClick={() => setTab("recipes")}
+        >
+          Мои рецепты
+        </button>
+      </div>
+
+      {tab === "plan" ? <DayPlanView /> : <MyRecipes />}
     </div>
   );
 }

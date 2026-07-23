@@ -14,7 +14,12 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..planner import generate_day_plan, suggest_recipes
+from ..planner import (
+    delete_recipe,
+    generate_day_plan,
+    list_saved_recipes,
+    suggest_recipes,
+)
 from .app import db_conn, get_optional_llm
 
 router = APIRouter(prefix="/api", tags=["planner"])
@@ -64,6 +69,24 @@ class RecipesOut(BaseModel):
     recipes: list[RecipeIdeaOut]
 
 
+class SavedRecipeItemOut(BaseModel):
+    name: str
+    grams: float
+
+
+class SavedRecipeOut(BaseModel):
+    id: int
+    name: str
+    yield_grams: float
+    steps: list[str]
+    ingredients: list[SavedRecipeItemOut]
+    kcal: float
+    protein: float
+    fat: float
+    carbs: float
+    created_at: str
+
+
 def _require_llm():
     llm = get_optional_llm()
     if llm is None:
@@ -86,3 +109,25 @@ def recipes_suggest(conn: sqlite3.Connection = Depends(db_conn)) -> RecipesOut:
     """Suggest a few dishes cookable from current inventory."""
     ideas = suggest_recipes(conn, _require_llm())
     return RecipesOut(recipes=[RecipeIdeaOut(**asdict(i)) for i in ideas])
+
+
+@router.get("/recipes", response_model=list[SavedRecipeOut])
+def recipes_saved(conn: sqlite3.Connection = Depends(db_conn)) -> list[SavedRecipeOut]:
+    """«Мои рецепты» — recipes saved to the base (created when dishes are cooked).
+
+    No LLM needed: БЖУ comes from each cooked dish's stored nutrition.
+    """
+    return [SavedRecipeOut(**asdict(r)) for r in list_saved_recipes(conn)]
+
+
+@router.delete("/recipes/{recipe_id}", status_code=204)
+def recipes_delete(recipe_id: int, conn: sqlite3.Connection = Depends(db_conn)) -> None:
+    """Delete a saved recipe. The cooked-dish product/stock is left intact."""
+    status = delete_recipe(conn, recipe_id)
+    if status == "missing":
+        raise HTTPException(status_code=404, detail="Рецепт не найден.")
+    if status == "referenced":
+        raise HTTPException(
+            status_code=409,
+            detail="Рецепт используется в записях приёмов пищи — удалить нельзя.",
+        )

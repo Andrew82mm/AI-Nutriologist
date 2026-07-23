@@ -7,7 +7,12 @@ from typing import Any
 
 from nutriologist.db import get_connection
 from nutriologist.inventory import cook_dish, ledger
-from nutriologist.planner import generate_day_plan, suggest_recipes
+from nutriologist.planner import (
+    delete_recipe,
+    generate_day_plan,
+    list_saved_recipes,
+    suggest_recipes,
+)
 from nutriologist.products.models import Product
 
 
@@ -193,6 +198,52 @@ def test_cook_stores_steps_and_plan_reuses_saved_recipe() -> None:
     llm = PlanFakeLLM(plan_responses=[menu, menu], nutrition_by_name={"яйцо куриное": (150, 12, 10, 1)})
     plan = generate_day_plan(conn, llm)
     assert plan.meals[0].saved is True
+
+
+def test_list_and_delete_saved_recipes() -> None:
+    conn = get_connection(":memory:")
+    pid = _add_stock(conn, "жумбар", 500)
+    prod = Product(id=pid, canonical_name="жумбар", is_food=True, canonical_unit="g")
+    # LLM supplies the ingredient's per-100 g macros so the dish's stored nutrition
+    # (per 100 g of a 100 g yield) equals them exactly.
+    llm = PlanFakeLLM(nutrition_by_name={"жумбар": (200, 10, 5, 20)})
+    cook_dish(conn, name="Жумбар печёный", ingredients=[(prod, 100)],
+              yield_grams=100, steps=["запечь", "подать"], llm=llm)
+
+    recipes = list_saved_recipes(conn)
+    assert len(recipes) == 1
+    r = recipes[0]
+    assert r.name == "Жумбар печёный"
+    assert r.steps == ["запечь", "подать"]
+    assert r.yield_grams == 100
+    assert [(i.name, i.grams) for i in r.ingredients] == [("жумбар", 100)]
+    assert r.kcal == 200 and r.protein == 10  # per-100 g from the cooked dish
+
+    # Delete succeeds when nothing references it; the row is gone afterwards.
+    assert delete_recipe(conn, r.id) == "deleted"
+    assert list_saved_recipes(conn) == []
+    assert delete_recipe(conn, r.id) == "missing"
+
+
+def test_delete_recipe_blocked_when_referenced_by_meal() -> None:
+    conn = get_connection(":memory:")
+    pid = _add_stock(conn, "гурба", 500)
+    prod = Product(id=pid, canonical_name="гурба", is_food=True, canonical_unit="g")
+    cook_dish(conn, name="Гурбовый суп", ingredients=[(prod, 200)], yield_grams=200)
+    rid = conn.execute("SELECT id FROM recipes WHERE name = 'Гурбовый суп'").fetchone()["id"]
+
+    # A logged meal references the recipe directly → deletion must be refused.
+    mid = conn.execute(
+        "INSERT INTO meals (ts, raw_text) VALUES (datetime('now', 'localtime'), 'x')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO meal_items (meal_id, recipe_id, grams, grams_source) VALUES (?, ?, ?, 'user')",
+        (mid, rid, 300),
+    )
+    conn.commit()
+
+    assert delete_recipe(conn, rid) == "referenced"
+    assert len(list_saved_recipes(conn)) == 1  # still in the base
 
 
 def test_suggest_recipes_from_inventory() -> None:
