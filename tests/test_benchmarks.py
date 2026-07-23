@@ -35,20 +35,27 @@ def test_reconciliation_render_handles_empty() -> None:
     res = bench_reconciliation.ReconResult(rows=[])
     out = bench_reconciliation.render(res)
     assert "Сходимость парсинга" in out
-    assert res.mean_abs_delta is None and res.worst is None
+    assert res.mean_abs_delta_in_store is None and res.mismatches == []
 
 
-def test_reconciliation_flags_mismatch() -> None:
+def test_reconciliation_separates_online_from_defects() -> None:
+    R = bench_reconciliation.ReconRow
     rows = [
-        bench_reconciliation.ReconRow("ok", "О'КЕЙ", "ofd_ru", 100.0, 100.0, 0.0, 5, True),
-        bench_reconciliation.ReconRow("bad", "Лента", "ofd_ru", 100.0, 91.0, -9.0, 4, False),
-        bench_reconciliation.ReconRow("skip", "—", "needs_llm", None, None, None, 0, False),
+        R("ok", "О'КЕЙ", "ofd_ru", 100.0, 100.0, 0.0, 5, True, online=False),
+        # Online order: Σ products < ИТОГ by the delivery fee — expected, not a defect.
+        R("online", "Лента", "ofd_ru", 200.0, 110.0, -90.0, 6, False, online=True),
+        # A true in-store mismatch — the only real defect.
+        R("defect", "Лента", "ofd_ru", 100.0, 91.0, -9.0, 4, False, online=False),
+        R("skip", "—", "needs_llm", None, None, None, 0, False),
     ]
     res = bench_reconciliation.ReconResult(rows=rows)
-    assert len(res.parsed) == 2          # needs_llm excluded from the denominator
-    assert len(res.reconciled) == 1
-    assert res.mean_abs_delta == 4.5     # (0 + 9) / 2
-    assert res.worst.label == "bad"
+    assert len(res.parsed) == 3               # needs_llm excluded
+    assert len(res.in_store) == 2             # online excluded from the clean signal
+    assert len(res.reconciled_in_store) == 1
+    assert [r.label for r in res.mismatches] == ["defect"]   # online is NOT a defect
+    assert [r.label for r in res.online] == ["online"]
+    assert res.mean_abs_delta_in_store == 4.5  # (0 + 9) / 2, online excluded
+    assert bench_reconciliation._status(rows[1]) == "≈ сбор/доставка"
 
 
 def test_nutrition_metrics_and_render() -> None:

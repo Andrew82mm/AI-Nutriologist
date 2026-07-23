@@ -30,8 +30,9 @@ def _summary(cov, rec, nut) -> str:
         ["БЖУ из датасета (без LLM)", f"{cov.nutrition_dataset_hits}/{cov.nutrition_total}",
          pct(cov.nutrition_dataset_hits, cov.nutrition_total),
          bar(cov.nutrition_dataset_hits, cov.nutrition_total)],
-        ["Сходимость парсинга (детерм.)", f"{len(rec.reconciled)}/{len(rec.parsed)}",
-         pct(len(rec.reconciled), len(rec.parsed)), bar(len(rec.reconciled), len(rec.parsed))],
+        ["Сходимость парсинга (офлайн-чеки)", f"{len(rec.reconciled_in_store)}/{len(rec.in_store)}",
+         pct(len(rec.reconciled_in_store), len(rec.in_store)),
+         bar(len(rec.reconciled_in_store), len(rec.in_store))],
     ]
     kcal_mae = "—"
     if nut.rows:
