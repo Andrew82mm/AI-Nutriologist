@@ -32,12 +32,18 @@ class PlanItemOut(BaseModel):
 
 class PlanMealOut(BaseModel):
     title: str
+    dish: str
+    steps: list[str]
+    saved: bool
     items: list[PlanItemOut]
 
 
 class ShoppingItemOut(BaseModel):
     name: str
-    grams: float
+    amount: float
+    unit: str
+    category: str | None
+    have: bool
 
 
 class DayPlanOut(BaseModel):

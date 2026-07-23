@@ -29,6 +29,12 @@
 * { box-sizing: border-box; }
 body { margin: 0; font-family: var(--font-body); }
 
+/* Hide the native number-input spinners (up/down arrows) everywhere — they clash
+   with the rounded pill inputs. Values stay editable by typing. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
 /* --- App shell (phone frame) --- */
 .app-ground {
   min-height: 100dvh;
@@ -206,6 +212,9 @@ body { margin: 0; font-family: var(--font-body); }
   border: 1px solid var(--color-divider);
   padding: 14px;
   gap: 8px;
+  /* A <button> resets its text to the UA default (~black) instead of
+     inheriting --color-text, so meal text stayed dark in dark theme. */
+  color: var(--color-text);
 }
 .meal-head { display: flex; align-items: baseline; gap: 8px; }
 .meal-title { font-family: var(--font-heading); font-size: 16px; }
@@ -216,6 +225,39 @@ body { margin: 0; font-family: var(--font-body); }
 .meal-macros { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 2px; }
 .macro-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; }
 .macro-dot { width: 9px; height: 9px; border-radius: 3px; }
+
+/* — plan recipe card buttons — */
+.recipe-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-top: 2px; padding: 4px 0;
+  background: none; border: 0; cursor: pointer;
+  font-family: var(--font-heading); font-weight: 600; font-size: 13px;
+  color: var(--color-accent-700);
+}
+.recipe-toggle:hover { color: var(--color-accent); }
+.recipe-toggle svg { transition: transform 0.15s ease; }
+.recipe-toggle.is-open svg { transform: rotate(90deg); }
+.recipe-steps { margin: 8px 0 0; padding-left: 20px; font-size: 13px; line-height: 1.55; }
+.recipe-steps li { margin-bottom: 3px; }
+
+.btn-cook {
+  gap: 7px;
+  color: var(--color-accent-700);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 28%, transparent);
+}
+.btn-cook:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-accent) 20%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+}
+.btn-cook:disabled { opacity: 0.6; }
+.btn-cook.is-done,
+.btn-cook.is-done:disabled {
+  opacity: 1;
+  color: var(--color-accent-2-800);
+  background: color-mix(in srgb, var(--color-accent-2) 16%, transparent);
+  border-color: color-mix(in srgb, var(--color-accent-2) 40%, transparent);
+}
 
 .empty-card {
   align-items: center;
@@ -400,18 +442,8 @@ body { margin: 0; font-family: var(--font-body); }
 
 .state-msg { text-align: center; color: var(--color-neutral-600); padding: 40px 20px; }
 
-/* --- Profile forms --- */
+/* --- Profile / Settings (shared) --- */
 .section-head { font-family: var(--font-heading); font-size: 18px; margin: 22px 0 10px; }
-.form-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 0;
-}
-.form-row label { color: var(--color-neutral-700); }
-.num-input { width: 90px; text-align: right; }
-.segmented { display: inline-flex; gap: 6px; flex-wrap: wrap; }
 .chip-btn {
   cursor: pointer;
   border: 1px solid var(--color-divider);
@@ -423,7 +455,91 @@ body { margin: 0; font-family: var(--font-body); }
   border-radius: 999px;
 }
 .chip-btn.is-on { background: var(--color-accent); color: #fff; border-color: transparent; }
-.restr-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* --- Profile screen (card-based settings) --- */
+.profile { display: flex; flex-direction: column; gap: 18px; padding: 6px 0 8px; }
+.set-section { display: flex; flex-direction: column; gap: 10px; }
+.set-label {
+  font-size: 11px; letter-spacing: 0.09em; text-transform: uppercase;
+  font-weight: 700; color: var(--color-accent); padding: 0 6px;
+}
+.set-card {
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 16px; border-radius: 24px;
+  background: var(--color-surface); box-shadow: var(--shadow-sm);
+}
+
+/* Connected segmented control (theme / goal type / sex / activity). */
+.seg-ctl {
+  display: flex; gap: 4px; padding: 4px; border-radius: 999px;
+  background: color-mix(in srgb, var(--color-text) 6%, transparent);
+}
+.seg-ctl-btn {
+  flex: 1; min-width: 0; padding: 8px 6px; border: 0; border-radius: 999px;
+  background: transparent; color: var(--color-text);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+  white-space: nowrap; text-overflow: ellipsis; overflow: hidden;
+  transition: background 0.15s, color 0.15s;
+}
+.seg-ctl-btn.is-on { background: var(--color-accent); color: #fff; box-shadow: var(--shadow-sm); }
+.seg-ctl-btn:not(.is-on):hover { color: var(--color-accent-700); }
+
+/* Label-on-left, control-on-right row. */
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.set-row-label { font-size: 14.5px; flex: none; }
+/* A segmented control sharing a row with a label takes the remaining width, so
+   its options stay evenly sized (e.g. «Светлая» no longer gets clipped). */
+.set-row .seg-ctl { flex: 1; min-width: 0; }
+.set-units { font-size: 13px; color: var(--color-neutral-600); }
+.set-pill { width: 118px; flex: none; }
+.set-pill .input { text-align: center; }
+
+/* Three-up field grid (macros, body metrics). */
+.set-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.set-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.set-field > label { font-size: 12px; color: var(--color-neutral-600); padding-left: 4px; }
+
+.set-hint { font-size: 12px; color: var(--color-neutral-600); line-height: 1.4; padding: 0 2px; }
+.set-warn {
+  font-size: 12px; padding: 8px 10px; border-radius: 12px; line-height: 1.45;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+.set-status { text-align: center; font-size: 13px; color: var(--color-neutral-600); margin-top: -8px; }
+
+/* Restriction chips. */
+.restr-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.restr-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 7px 13px; border-radius: 999px; font: inherit; font-size: 13px;
+  cursor: pointer;
+  background: var(--color-accent-100); color: var(--color-accent-800);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 25%, transparent);
+}
+.restr-chip:hover { background: var(--color-accent-200); }
+.restr-x { opacity: 0.55; font-size: 11px; }
+.restr-add {
+  padding: 7px 13px; border-radius: 999px; font: inherit; font-size: 13px;
+  cursor: pointer; color: var(--color-text);
+  background: transparent; border: 1px dashed var(--color-divider);
+}
+.restr-add:hover { border-color: var(--color-accent); color: var(--color-accent-700); }
+
+/* Email connection. */
+.set-mail-btn { width: 100%; gap: 8px; }
+.set-mail-form { display: flex; gap: 8px; }
+.set-mail-form .input { flex: 1; min-width: 0; }
+.set-mail-connected {
+  display: flex; align-items: center; gap: 10px;
+  padding: 11px 13px; border-radius: 16px;
+  background: color-mix(in srgb, var(--color-accent-2) 14%, transparent);
+}
+.set-mail-icon { color: var(--color-accent-2-700); display: flex; flex: none; }
+.set-mail-addr { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-mail-off { flex: none; font-size: 13px; }
+
+.set-actions { display: flex; gap: 10px; }
+.set-actions .btn { flex: 1; }
+.set-about { padding-top: 4px; border-top: 1px solid var(--color-divider); }
 
 /* --- Chat overlay --- */
 .chat-overlay {

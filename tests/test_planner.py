@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from nutriologist.db import get_connection
-from nutriologist.inventory import ledger
+from nutriologist.inventory import cook_dish, ledger
 from nutriologist.planner import generate_day_plan, suggest_recipes
+from nutriologist.products.models import Product
 
 
 class PlanFakeLLM:
@@ -60,7 +62,8 @@ def test_day_plan_recomputes_macros_and_shopping_list() -> None:
 
     menu = {
         "meals": [
-            {"title": "Обед", "items": [
+            {"title": "Обед", "dish": "Зорпаль с квамбилатом", "steps": ["смешать", "подать"],
+             "ingredients": [
                 {"name": "зорпаль", "grams": 200},
                 {"name": "квамбилат", "grams": 100},
             ]},
@@ -78,18 +81,27 @@ def test_day_plan_recomputes_macros_and_shopping_list() -> None:
 
     # Deterministic recompute: 200 g зорпаль → 220 kcal, 100 g квамбилат → 130 kcal.
     assert plan.totals["kcal"] == 350
-    # Shopping list: квамбилат (100 g, none on hand) needed; зорпаль fully covered.
-    names = {s.name for s in plan.shopping_list}
-    assert "квамбилат" in names
-    assert "зорпаль" not in names
+    # Meals are now recipes: dish name + steps carried through.
+    assert plan.meals[0].dish == "Зорпаль с квамбилатом"
+    assert plan.meals[0].steps == ["смешать", "подать"]
+    assert plan.meals[0].saved is False  # nothing saved in the base yet
+    # Shopping list now carries every ingredient, tagged by what's on hand:
+    # зорпаль fully covered (have), квамбилат must be bought (100 g).
+    by_name = {s.name: s for s in plan.shopping_list}
+    assert by_name["зорпаль"].have is True
+    assert by_name["квамбилат"].have is False
+    assert by_name["квамбилат"].amount == 100
+    assert by_name["квамбилат"].unit == "г"
 
 
 def test_day_plan_runs_one_correction_pass_when_far_from_goal() -> None:
     conn = get_connection(":memory:")
     # First menu is tiny (way under the 2200 goal) → triggers a correction pass
     # that returns a bigger menu.
-    small = {"meals": [{"title": "Завтрак", "items": [{"name": "флюмо", "grams": 100}]}]}
-    big = {"meals": [{"title": "Обед", "items": [{"name": "зибуль", "grams": 1000}]}]}
+    small = {"meals": [{"title": "Завтрак", "dish": "Флюмо", "steps": [],
+                        "ingredients": [{"name": "флюмо", "grams": 100}]}]}
+    big = {"meals": [{"title": "Обед", "dish": "Зибуль", "steps": [],
+                      "ingredients": [{"name": "зибуль", "grams": 1000}]}]}
     llm = PlanFakeLLM(
         plan_responses=[small, big],
         nutrition_by_name={"флюмо": (50, 0, 0, 13), "зибуль": (350, 12, 2, 70)},
@@ -100,6 +112,26 @@ def test_day_plan_runs_one_correction_pass_when_far_from_goal() -> None:
     assert plan.adjusted is True
     assert llm.plan_calls == 2
     assert plan.totals["kcal"] == 3500  # from the corrected (big) menu
+
+
+def test_cook_stores_steps_and_plan_reuses_saved_recipe() -> None:
+    conn = get_connection(":memory:")
+    pid = _add_stock(conn, "яйцо куриное", 500)
+    egg = Product(id=pid, canonical_name="яйцо куриное", is_food=True, canonical_unit="g")
+
+    # Cooking a dish records it in the recipe base together with its steps.
+    cook_dish(conn, name="Омлет", ingredients=[(egg, 100)], steps=["взбить", "пожарить"])
+    row = conn.execute("SELECT steps FROM recipes WHERE name = 'Омлет'").fetchone()
+    assert json.loads(row["steps"]) == ["взбить", "пожарить"]
+
+    # A later plan that names that dish is flagged as reusing the saved recipe.
+    _set_goal(conn, 200)
+    menu = {"meals": [{"title": "Завтрак", "dish": "Омлет", "steps": ["взбить"],
+                       "ingredients": [{"name": "яйцо куриное", "grams": 100}]}]}
+    # Two identical responses so a correction pass (if it fires) still yields it.
+    llm = PlanFakeLLM(plan_responses=[menu, menu], nutrition_by_name={"яйцо куриное": (150, 12, 10, 1)})
+    plan = generate_day_plan(conn, llm)
+    assert plan.meals[0].saved is True
 
 
 def test_suggest_recipes_from_inventory() -> None:

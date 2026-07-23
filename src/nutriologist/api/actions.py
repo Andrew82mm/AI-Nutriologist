@@ -24,6 +24,7 @@ from ..inventory.cooking import cook_dish
 from ..planner import suggest_recipes
 from ..products.meal_parse import parse_cook_text, parse_meal_text
 from ..products.models import Product
+from ..products.product_match import find_exact_or_normalized, resolve_product
 from ..products.nutrition import resolve_nutrition
 from . import foods
 from .app import db_conn, get_optional_llm
@@ -36,12 +37,22 @@ _UNIT_LABELS = {"g": "г", "ml": "мл", "piece": "шт"}
 
 # --- shared write helpers --------------------------------------------------
 def ensure_product(
-    conn: sqlite3.Connection, name: str, category: str | None, canonical_unit: str | None
+    conn: sqlite3.Connection,
+    name: str,
+    category: str | None,
+    canonical_unit: str | None,
+    *,
+    resolver=find_exact_or_normalized,
 ) -> int:
-    """Get-or-create a product by canonical name; backfill missing classification."""
-    row = conn.execute(
-        "SELECT id, category, canonical_unit FROM products WHERE canonical_name = ?", (name,)
-    ).fetchone()
+    """Get-or-create a product by canonical name; backfill missing classification.
+
+    By default the lookup is case/ё-insensitive (layers 1–2 of `product_match`)
+    so «Салат» and «салат» don't spawn duplicate products, but no synonym/fuzzy
+    matching — creation stays conservative to avoid merging distinct products.
+    The meal-write path passes `resolver=resolve_product` so an eaten dish is
+    attributed to (and drawn down from) a fuzzily-matched fridge product.
+    """
+    row = resolver(conn, name)
     if row is not None:
         if (row["category"] is None and category) or (row["canonical_unit"] is None and canonical_unit):
             conn.execute(
@@ -144,7 +155,11 @@ def _write_meal_items(conn: sqlite3.Connection, meal_id: int, items: list[FoodIt
         name = it.name.strip()
         if not name:
             continue
-        pid = ensure_product(conn, name, it.category, it.canonical_unit)
+        # Fuzzy-resolve so «капустный салат» is logged under (and draws down)
+        # the existing «Салат из капусты» product instead of forking a new one.
+        pid = ensure_product(
+            conn, name, it.category, it.canonical_unit, resolver=resolve_product
+        )
         per100 = tuple(it.per100) if it.per100 else (0, 0, 0, 0)
         if any(per100):
             if it.per100_source == "user":
@@ -233,11 +248,10 @@ def estimate_position(
     if not name:
         return out
 
-    prod = conn.execute(
-        "SELECT id, category, canonical_unit, piece_weight_grams "
-        "FROM products WHERE canonical_name = ?",
-        (name,),
-    ).fetchone()
+    # Fuzzy-resolve to an existing product so the preview reflects stored
+    # nutrition + fridge stock even when the typed name is a case/synonym
+    # variant («капустный салат» → «Салат из капусты», «бёдра» → «бедра»).
+    prod = resolve_product(conn, name)
     # A staple gives us unit + per-100 for a known food. Prefer an exact
     # canonical-name hit (so «яйцо куриное» wins over the «куриное филе» keyword
     # it also brushes); otherwise accept an unambiguous single match.
@@ -613,6 +627,7 @@ class CookFromChatRequest(BaseModel):
     name: str
     ingredients: list[CookByNameIngredient]
     yield_grams: float | None = None
+    steps: list[str] | None = None  # optional cooking instructions (from the planner)
 
 
 @router.post("/cook/from-chat")
@@ -643,6 +658,6 @@ def cook_from_chat(
 
     dish = cook_dish(
         conn, name=name, ingredients=ingredients,
-        yield_grams=payload.yield_grams, llm=get_optional_llm(),
+        yield_grams=payload.yield_grams, steps=payload.steps, llm=get_optional_llm(),
     )
     return {"dish_id": dish.id, "name": dish.canonical_name}

@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .app import db_conn
@@ -104,12 +104,10 @@ def load_goal(conn: sqlite3.Connection) -> Macros:
     )
 
 
-@router.get("/diary/today", response_model=DiaryDay)
-def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
-    today = date.today().isoformat()
-
+def diary_for_date(conn: sqlite3.Connection, day: str) -> DiaryDay:
+    """Build the DiaryDay (meals + macros vs goal) for one YYYY-MM-DD date."""
     meal_rows = conn.execute(
-        "SELECT id, ts, title FROM meals WHERE substr(ts, 1, 10) = ? ORDER BY ts", (today,)
+        "SELECT id, ts, title FROM meals WHERE substr(ts, 1, 10) = ? ORDER BY ts", (day,)
     ).fetchall()
 
     meals: list[DiaryMeal] = []
@@ -166,9 +164,25 @@ def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
     goal = load_goal(conn)
     total = Macros(**{k: round(v) for k, v in total.model_dump().items()})
     return DiaryDay(
-        date=today,
+        date=day,
         goal=goal,
         consumed=total,
         remaining_kcal=max(0, round(goal.kcal - total.kcal)),
         meals=meals,
     )
+
+
+@router.get("/diary/today", response_model=DiaryDay)
+def diary_today(conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
+    return diary_for_date(conn, date.today().isoformat())
+
+
+@router.get("/diary/{day}", response_model=DiaryDay)
+def diary_day(day: str, conn: sqlite3.Connection = Depends(db_conn)) -> DiaryDay:
+    """Meals + macros for a specific day (YYYY-MM-DD) — powers the stats heatmap
+    day view. Rejects malformed dates so the `{day}` route can't swallow typos."""
+    try:
+        day = date.fromisoformat(day).isoformat()
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Ожидается дата в формате YYYY-MM-DD")
+    return diary_for_date(conn, day)

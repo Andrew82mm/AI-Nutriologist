@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from .app import db_conn
 from .diary import Macros
+from ..energy import daily_goal
 
 router = APIRouter(prefix="/api", tags=["profile"])
 
@@ -72,9 +73,39 @@ def _load(conn: sqlite3.Connection) -> Profile:
     )
 
 
+class GoalRequest(BaseModel):
+    body: Body = Field(default_factory=Body)
+    goal_type: str = "Поддержание"
+
+
+class ComputedGoal(Macros):
+    # Human-readable warnings when a sanity guard adjusted the raw goal
+    # (underweight+deficit, obese+surplus, kcal floor). Empty when none fired.
+    notes: list[str] = Field(default_factory=list)
+
+
 @router.get("/profile", response_model=Profile)
 def get_profile(conn: sqlite3.Connection = Depends(db_conn)) -> Profile:
     return _load(conn)
+
+
+@router.post("/profile/compute-goal", response_model=ComputedGoal)
+def compute_goal(req: GoalRequest) -> ComputedGoal:
+    """Mifflin-St Jeor daily goal from body metrics + goal type, with sanity
+    guards (see energy.daily_goal). Any guard that fired is reported in `notes`.
+
+    Stateless — the frontend calls this as the profile body changes to refill
+    the (still editable) goal fields. Single source of truth for the formula.
+    """
+    g = daily_goal(
+        sex=req.body.sex,
+        age=req.body.age,
+        height=req.body.height,
+        weight=req.body.weight,
+        activity=req.body.activity,
+        goal_type=req.goal_type,
+    )
+    return ComputedGoal(**g)
 
 
 @router.put("/profile", response_model=Profile)

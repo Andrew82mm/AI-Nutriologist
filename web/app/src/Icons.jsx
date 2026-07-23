@@ -76,6 +76,14 @@ export const IconSun = ({ size = 19 }) =>
 export const IconMoon = ({ size = 19 }) =>
   svg(size, <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />, { strokeWidth: 2.4 });
 
+export const IconMail = ({ size = 18 }) =>
+  svg(size, (
+    <>
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="m3 7 9 6 9-6" />
+    </>
+  ), { strokeWidth: 2.1 });
+
 export const IconTrash = ({ size = 18 }) =>
   svg(size, (
     <>

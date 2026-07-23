@@ -25,13 +25,28 @@ const TABS = [
 
 export default function App() {
   const [screen, setScreen] = useState("diary");
-  const [theme, setTheme] = useState("light");
+  // Theme preference is "light" | "dark" | "system"; `resolvedTheme` is the
+  // concrete "light"/"dark" actually applied (system follows the OS setting).
+  const [theme, setTheme] = useState(() => localStorage.getItem("theme") || "light");
+  const [resolvedTheme, setResolvedTheme] = useState("light");
   const [chatOpen, setChatOpen] = useState(false);
   // Bumped after the chat commits a meal/purchase, so data screens refetch.
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
+    localStorage.setItem("theme", theme);
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      const r = theme === "system" ? (mq.matches ? "dark" : "light") : theme;
+      setResolvedTheme(r);
+      document.documentElement.setAttribute("data-theme", r);
+    };
+    apply();
+    // Only track OS changes while following the system preference.
+    if (theme === "system") {
+      mq.addEventListener("change", apply);
+      return () => mq.removeEventListener("change", apply);
+    }
   }, [theme]);
 
   const active = SCREENS[screen];
@@ -48,13 +63,13 @@ export default function App() {
       );
       case "fridge": return <Fridge reloadKey={reloadKey} onChanged={() => setReloadKey((k) => k + 1)} />;
       case "plan": return <Plan />;
-      case "profile": return <Profile />;
+      case "profile": return <Profile theme={theme} onThemeChange={setTheme} />;
       default: return null;
     }
   };
 
   return (
-    <div className="app-ground" data-theme={theme}>
+    <div className="app-ground" data-theme={resolvedTheme}>
       <div className="app-frame">
         <header className="app-header">
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -65,9 +80,9 @@ export default function App() {
             className="btn btn-secondary btn-icon"
             style={{ width: 40, height: 40, flex: "none" }}
             aria-label="Сменить тему"
-            onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+            onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}
           >
-            {theme === "dark" ? <IconSun /> : <IconMoon />}
+            {resolvedTheme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
 

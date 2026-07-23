@@ -12,6 +12,7 @@ where yield is the user-entered cooked weight (fallback: sum of raw weights).
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from ..llm.client import StructuredLLMClient
@@ -92,6 +93,7 @@ def cook_dish(
     name: str,
     ingredients: list[tuple[Product, float]],
     yield_grams: float | None = None,
+    steps: list[str] | None = None,
     llm: StructuredLLMClient | None = None,
 ) -> Product:
     """Cook `name` from `ingredients` (product, grams); stock it as a dish product.
@@ -99,9 +101,12 @@ def cook_dish(
     Consumes each ingredient from inventory (`cooked −`), records the recipe,
     computes the dish's per-100 g БЖУ, and stocks `yield` grams of the dish
     (`cooked +`). `yield_grams` defaults to the sum of ingredient weights.
-    Returns the dish product. Re-cooking the same name adds another batch and
-    refreshes the recipe/БЖУ to the latest (MVP: no separate batches).
+    `steps` (optional cooking instructions) are stored on the recipe so a
+    planned dish keeps its instructions in the base. Returns the dish product.
+    Re-cooking the same name adds another batch and refreshes the recipe/БЖУ to
+    the latest (MVP: no separate batches); steps are only overwritten when given.
     """
+    steps_json = json.dumps([s for s in steps if s], ensure_ascii=False) if steps else None
     if not ingredients:
         raise ValueError("a dish needs at least one ingredient")
     for product, _grams in ingredients:
@@ -120,17 +125,18 @@ def cook_dish(
     ).fetchone()
     if existing is not None:
         recipe_id = existing["id"]
+        # COALESCE keeps existing steps when this cook didn't supply new ones.
         conn.execute(
-            "UPDATE recipes SET yield_grams = ? WHERE id = ?",
-            (effective_yield, recipe_id),
+            "UPDATE recipes SET yield_grams = ?, steps = COALESCE(?, steps) WHERE id = ?",
+            (effective_yield, steps_json, recipe_id),
         )
         conn.execute(
             "DELETE FROM recipe_ingredients WHERE recipe_id = ?", (recipe_id,)
         )
     else:
         recipe_id = conn.execute(
-            "INSERT INTO recipes (name, yield_grams, source) VALUES (?, ?, 'user')",
-            (name, effective_yield),
+            "INSERT INTO recipes (name, yield_grams, source, steps) VALUES (?, ?, 'user', ?)",
+            (name, effective_yield, steps_json),
         ).lastrowid
 
     for product, grams in ingredients:

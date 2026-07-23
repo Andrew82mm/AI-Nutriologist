@@ -33,12 +33,16 @@ export const api = {
     request(`/inventory/${productId}/action`, { method: "POST", body: { action } }),
   cook: (name, ingredients, yieldGrams) =>
     request("/cook", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams } }),
-  cookFromChat: (name, ingredients, yieldGrams) =>
-    request("/cook/from-chat", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams } }),
+  cookFromChat: (name, ingredients, yieldGrams, steps) =>
+    request("/cook/from-chat", { method: "POST", body: { name, ingredients, yield_grams: yieldGrams, steps } }),
   getDiary: () => request("/diary/today"),
+  getDiaryFor: (date) => request(`/diary/${date}`),
   getStats: (days = 7) => request(`/stats?days=${days}`),
   getProfile: () => request("/profile"),
   putProfile: (profile) => request("/profile", { method: "PUT", body: profile }),
+  // Mifflin-St Jeor daily goal from body metrics + goal type (stateless).
+  computeGoal: (body, goalType) =>
+    request("/profile/compute-goal", { method: "POST", body: { body, goal_type: goalType } }),
   chat: (text) => request("/chat", { method: "POST", body: { text } }),
   planDay: () => request("/plan/day", { method: "POST" }),
   suggestRecipes: () => request("/recipes/suggest", { method: "POST" }),
