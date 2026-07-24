@@ -68,6 +68,49 @@ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
 input[type="number"]::-webkit-outer-spin-button,
 input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
+/* --- Showcase (marketing composition, #showcase) --- */
+.showcase {
+  min-height: 100dvh;
+  padding: 48px 40px 56px;
+  background:
+    radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--color-accent) 16%, var(--color-bg)), transparent),
+    var(--color-bg);
+  color: var(--color-text);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 36px;
+}
+.showcase-head { text-align: center; }
+.showcase-title {
+  font-family: var(--font-heading);
+  font-weight: var(--font-heading-weight);
+  font-size: 44px;
+  letter-spacing: -0.02em;
+  margin: 0;
+}
+.showcase-sub {
+  margin: 8px 0 0;
+  font-size: 17px;
+  color: var(--color-neutral-700);
+}
+.showcase-row {
+  display: flex;
+  gap: 32px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+/* In the row each phone is a fixed, non-scrolling card (top of the screen is
+   the interesting part), with a stronger shadow to read as a device. The
+   double-class selector outweighs the plain `.app-frame` sizing above. */
+.app-frame.showcase-phone {
+  width: 380px;
+  height: 820px;
+  border-radius: 40px;
+  box-shadow: 0 24px 60px color-mix(in srgb, #2e2b25 26%, transparent);
+}
+.showcase-phone .app-scroll { overflow: hidden; }
+
 /* --- App shell (phone frame) --- */
 .app-ground {
   min-height: 100dvh;

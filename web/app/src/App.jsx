@@ -9,14 +9,18 @@ import {
   IconChat, IconArrowRight, IconSun, IconMoon,
 } from "./Icons";
 
-const SCREENS = {
-  diary: { kicker: "12 июня · сегодня", title: "Дневник" },
+// Today's date as «24 июля» (Russian genitive), for the diary header.
+const todayLabel = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" })
+  .format(new Date());
+
+export const SCREENS = {
+  diary: { kicker: `${todayLabel} · сегодня`, title: "Дневник" },
   fridge: { kicker: "Инвентарь", title: "Холодильник" },
   plan: { kicker: "Меню и покупки", title: "План" },
   profile: { kicker: "Настройки", title: "Профиль" },
 };
 
-const TABS = [
+export const TABS = [
   ["diary", "Дневник", IconDiary],
   ["fridge", "Холодильник", IconFridge],
   ["plan", "План", IconPlan],

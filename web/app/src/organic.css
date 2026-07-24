@@ -1,5 +1,4 @@
 /* Organic — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
-@import url('https://fonts.googleapis.com/css2?family=Caprasimo:wght@400&family=Figtree:wght@400;600;700&display=swap');
 
 :root {
   --color-bg: #f5ead8;
@@ -41,9 +40,13 @@
   --color-accent-2-800: #3d472b;
   --color-accent-2-900: #272e1b;
 
-  --font-heading: "Caprasimo", system-ui, sans-serif;
-  --font-heading-weight: 400;
-  --font-body: "Figtree", system-ui, sans-serif;
+  /* One system font stack for everything — consistent, no bundled web fonts,
+     no decorative display face on numbers. Hierarchy comes from size and a
+     mild heading weight (600), not a separate typeface. Retune weight here. */
+  --font-system: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-heading: var(--font-system);
+  --font-heading-weight: 600;
+  --font-body: var(--font-system);
 
   --space-1: 4.4px;
   --space-2: 8.8px;
