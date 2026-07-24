@@ -74,9 +74,6 @@ export default function Showcase() {
     <div className="showcase" data-theme="light" data-palette="forest">
       <header className="showcase-head">
         <h1 className="showcase-title">AI-Nutriologist</h1>
-        <p className="showcase-sub">
-          Умный трекер питания: холодильник, дневник БЖУ и план под цель
-        </p>
       </header>
       <div className="showcase-row">
         <Phone screenId="diary" />

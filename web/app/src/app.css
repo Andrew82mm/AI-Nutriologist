@@ -71,7 +71,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 /* --- Showcase (marketing composition, #showcase) --- */
 .showcase {
   min-height: 100dvh;
-  padding: 48px 40px 56px;
+  padding: 40px 20px 44px;
   background:
     radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--color-accent) 16%, var(--color-bg)), transparent),
     var(--color-bg);
@@ -96,7 +96,7 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
 }
 .showcase-row {
   display: flex;
-  gap: 32px;
+  gap: 22px;
   flex-wrap: wrap;
   justify-content: center;
 }
@@ -104,9 +104,9 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
    the interesting part), with a stronger shadow to read as a device. The
    double-class selector outweighs the plain `.app-frame` sizing above. */
 .app-frame.showcase-phone {
-  width: 380px;
-  height: 820px;
-  border-radius: 40px;
+  width: 430px;
+  height: 900px;
+  border-radius: 44px;
   box-shadow: 0 24px 60px color-mix(in srgb, #2e2b25 26%, transparent);
 }
 .showcase-phone .app-scroll { overflow: hidden; }
