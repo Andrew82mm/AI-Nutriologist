@@ -1,29 +1,31 @@
 """Import a receipt PDF from a local path into the fridge (web-facing).
 
-Chains the receipt pipeline that already exists (and is unit-tested) end to end,
-which until now was reachable only from the CLI:
+Thin HTTP wrapper over `receipts.pipeline.import_receipt_pdf`, which chains the
+unit-tested core end to end:
 
     parse_receipt_pdf → save_receipt → normalize_receipt_items → income_from_receipt
 
-The receipt is referenced by a server-side file path (mail automation that would
-fetch it automatically is итерация 8, out of scope here). Normalization needs an
-LLM, so this endpoint requires one to be configured; parsing an unknown receipt
-layout also uses it as a fallback.
+The receipt is referenced by a server-side file path. Fetching receipts
+automatically from a mailbox is `mail/` (итерация 8) — see `POST
+/api/receipts/poll-mail`. Normalization needs an LLM, so this endpoint requires
+one to be configured; parsing an unknown receipt layout also uses it.
 """
 
 from __future__ import annotations
 
+import imaplib
 import sqlite3
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from ..inventory.operations import income_from_receipt
-from ..products.receipt_link import normalize_receipt_items
-from ..receipts.parse import UnsupportedReceiptFormat, parse_receipt_pdf
+from ..mail.config import MailConfigError, load_mail_config_from_env
+from ..mail.imap import ImapMailbox
+from ..mail.poller import poll_mailbox
+from ..receipts.parse import UnsupportedReceiptFormat
 from ..receipts.pdf_text import PdfExtractionError
-from ..receipts.storage import save_receipt
+from ..receipts.pipeline import import_receipt_pdf
 from .app import db_conn, get_optional_llm
 
 router = APIRouter(prefix="/api", tags=["receipts"])
@@ -40,22 +42,6 @@ class ReceiptImportOut(BaseModel):
     items_normalized: int  # lines linked to a product this run (0 on a re-import)
     items_posted: int      # edible lines added to inventory (0 on a re-import)
     duplicate: bool        # the receipt (fd_number, fpd) was already imported
-
-
-def _already_imported(conn: sqlite3.Connection, fd_number: str | None, fpd: str | None) -> bool:
-    """True if a receipt with this fiscal fingerprint already exists.
-
-    Mirrors `save_receipt`'s dedup key so we can tell the caller a re-import was a
-    no-op (rather than inferring it from a zero post count, which a receipt of
-    only non-food items would also produce)."""
-    if fd_number is None or fpd is None:
-        return False
-    return (
-        conn.execute(
-            "SELECT 1 FROM receipts WHERE fd_number = ? AND fpd = ?", (fd_number, fpd)
-        ).fetchone()
-        is not None
-    )
 
 
 @router.post("/receipts/import", response_model=ReceiptImportOut)
@@ -76,22 +62,82 @@ def import_receipt(
         )
 
     try:
-        parsed = parse_receipt_pdf(path, llm=llm)
+        result = import_receipt_pdf(conn, path, llm)
     except UnsupportedReceiptFormat:
         raise HTTPException(status_code=422, detail="Формат чека не распознан.")
     except PdfExtractionError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
 
-    duplicate = _already_imported(conn, parsed.fd_number, parsed.fpd)
-    receipt_id = save_receipt(conn, parsed)
-    normalized = normalize_receipt_items(conn, receipt_id, llm)
-    posted = income_from_receipt(conn, receipt_id)
-
     return ReceiptImportOut(
-        receipt_id=receipt_id,
-        store_name=parsed.store_name,
-        items_parsed=len(parsed.items),
-        items_normalized=normalized,
-        items_posted=posted,
-        duplicate=duplicate,
+        receipt_id=result.receipt_id,
+        store_name=result.store_name,
+        items_parsed=result.items_parsed,
+        items_normalized=result.items_normalized,
+        items_posted=result.items_posted,
+        duplicate=result.duplicate,
+    )
+
+
+class PollMailReceiptOut(BaseModel):
+    filename: str
+    ok: bool
+    receipt_id: int | None = None
+    store_name: str | None = None
+    items_posted: int | None = None
+    duplicate: bool | None = None
+    error: str | None = None
+
+
+class PollMailOut(BaseModel):
+    messages_seen: int
+    imported: int
+    duplicates: int
+    errors: int
+    receipts: list[PollMailReceiptOut]
+
+
+@router.post("/receipts/poll-mail", response_model=PollMailOut)
+def poll_mail(conn: sqlite3.Connection = Depends(db_conn)) -> PollMailOut:
+    """Poll the receipts mailbox once, importing any PDF receipts found.
+
+    Mailbox settings come from `.env` (MAIL_*); an LLM must be configured too
+    (normalization + unknown-layout parsing). Idempotent by fiscal fingerprint,
+    so a re-run won't double-stock the fridge.
+    """
+    llm = get_optional_llm()
+    if llm is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Для нормализации чека нужен настроенный LLM — заполните .env "
+            "(LLM_PROVIDER, LLM_API_KEY, ...).",
+        )
+
+    try:
+        mail_config = load_mail_config_from_env()
+    except MailConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    try:
+        with ImapMailbox(mail_config) as box:
+            summary = poll_mailbox(conn, box, llm)
+    except (OSError, imaplib.IMAP4.error) as exc:  # socket/DNS failures + IMAP login/protocol errors
+        raise HTTPException(status_code=502, detail=f"Не удалось опросить почту: {exc}")
+
+    return PollMailOut(
+        messages_seen=summary.messages_seen,
+        imported=summary.imported,
+        duplicates=summary.duplicates,
+        errors=summary.errors,
+        receipts=[
+            PollMailReceiptOut(
+                filename=r.filename,
+                ok=r.ok,
+                receipt_id=r.result.receipt_id if r.result else None,
+                store_name=r.result.store_name if r.result else None,
+                items_posted=r.result.items_posted if r.result else None,
+                duplicate=r.result.duplicate if r.result else None,
+                error=r.error,
+            )
+            for r in summary.receipts
+        ],
     )

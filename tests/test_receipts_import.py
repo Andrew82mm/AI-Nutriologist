@@ -6,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 import nutriologist.api.receipts_import as ri
+import nutriologist.receipts.pipeline as pipeline
 from nutriologist.db import get_connection
 from nutriologist.receipts import ofdru
 
@@ -33,7 +34,7 @@ def _import(conn, path):
 def test_import_parses_normalizes_and_stocks(tmp_path, monkeypatch) -> None:
     conn = get_connection(":memory:")
     monkeypatch.setattr(ri, "get_optional_llm", _fake_llm)
-    monkeypatch.setattr(ri, "parse_receipt_pdf", lambda path, llm=None: ofdru.parse(LENTA_LIKE_TEXT))
+    monkeypatch.setattr(pipeline, "parse_receipt_pdf", lambda path, llm=None: ofdru.parse(LENTA_LIKE_TEXT))
 
     out = _import(conn, _pdf(tmp_path))
 
@@ -47,7 +48,7 @@ def test_import_parses_normalizes_and_stocks(tmp_path, monkeypatch) -> None:
 def test_reimport_same_receipt_is_idempotent(tmp_path, monkeypatch) -> None:
     conn = get_connection(":memory:")
     monkeypatch.setattr(ri, "get_optional_llm", _fake_llm)
-    monkeypatch.setattr(ri, "parse_receipt_pdf", lambda path, llm=None: ofdru.parse(LENTA_LIKE_TEXT))
+    monkeypatch.setattr(pipeline, "parse_receipt_pdf", lambda path, llm=None: ofdru.parse(LENTA_LIKE_TEXT))
     pdf = _pdf(tmp_path)
 
     first = _import(conn, pdf)
