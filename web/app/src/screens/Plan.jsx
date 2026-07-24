@@ -14,6 +14,27 @@ import { IconChevronRight, IconTrash } from "../Icons";
 const round = (x) => Math.round(x || 0);
 const catLabel = (c) => (c || "прочее").toUpperCase();
 
+// The generated day-plan is cached in localStorage keyed by the local calendar
+// day, so it survives page reloads. It's dropped on «Пересоставить» (overwrite)
+// or automatically when a new day starts (stored date no longer matches today).
+const PLAN_KEY = "dayPlan";
+const todayKey = () => new Date().toLocaleDateString("sv-SE"); // local YYYY-MM-DD
+
+const loadStoredPlan = () => {
+  try {
+    const raw = localStorage.getItem(PLAN_KEY);
+    if (!raw) return null;
+    const saved = JSON.parse(raw);
+    if (saved.date !== todayKey()) {
+      localStorage.removeItem(PLAN_KEY); // stale — belongs to a previous day
+      return null;
+    }
+    return saved;
+  } catch {
+    return null;
+  }
+};
+
 // A little frying pan, for the «Приготовить» button.
 const IconPan = () => (
   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -208,12 +229,31 @@ function MyRecipes() {
 
 // ── «План на день» view ─────────────────────────────────────────────────────
 function DayPlanView() {
-  const [plan, setPlan] = useState(null);
+  // Rehydrate the last plan (and its shopping/cook progress) from localStorage,
+  // once, so a reload doesn't lose today's generated plan.
+  const stored = loadStoredPlan();
+  const [plan, setPlan] = useState(stored?.plan || null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const [ticked, setTicked] = useState({}); // local "picked up while shopping" state
-  const [cookState, setCookState] = useState({}); // meal index -> 'busy' | 'done'
+  const [ticked, setTicked] = useState(stored?.ticked || {}); // "picked up while shopping"
+  // Restore cook progress, but drop any 'busy' left over from a reload mid-cook
+  // (that request didn't survive) so its button isn't stuck on «Готовлю…».
+  const [cookState, setCookState] = useState(() => {
+    const s = { ...(stored?.cookState || {}) };
+    for (const k in s) if (s[k] === "busy") delete s[k];
+    return s;
+  });
   const [copied, setCopied] = useState(false);
+
+  // Persist plan + progress under today's date whenever any of them changes.
+  // A null plan clears the cache (nothing generated yet).
+  useEffect(() => {
+    if (plan) {
+      localStorage.setItem(PLAN_KEY, JSON.stringify({ date: todayKey(), plan, ticked, cookState }));
+    } else {
+      localStorage.removeItem(PLAN_KEY);
+    }
+  }, [plan, ticked, cookState]);
 
   const generate = async () => {
     setBusy(true);

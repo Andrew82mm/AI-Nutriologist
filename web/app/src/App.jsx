@@ -34,6 +34,10 @@ export default function App() {
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    document.documentElement.setAttribute("data-palette", "forest");
+  }, []);
+
+  useEffect(() => {
     localStorage.setItem("theme", theme);
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
@@ -69,7 +73,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-ground" data-theme={resolvedTheme}>
+    <div className="app-ground" data-theme={resolvedTheme} data-palette="forest">
       <div className="app-frame">
         <header className="app-header">
           <div style={{ flex: 1, minWidth: 0 }}>
