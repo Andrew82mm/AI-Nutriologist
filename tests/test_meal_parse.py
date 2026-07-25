@@ -159,6 +159,86 @@ def test_chat_unknown_without_llm(monkeypatch) -> None:
     assert resp["intent"] == "unknown"
 
 
+# --- offline: resolve arbitrary products via the DB + dataset (no LLM) -------
+def test_extract_quantity_cleans_name_and_reads_amount() -> None:
+    assert foods.extract_quantity("творог 5% 200 г") == ("творог 5%", 200)
+    name, amount = foods.extract_quantity("два яйца")
+    assert (name, amount) == ("яйца", 2)
+    assert foods.extract_quantity("молоко 1 л") == ("молоко", 1000)
+    assert foods.extract_quantity("кило абрикосов") == ("абрикосов", 1000)
+    assert foods.extract_quantity("полкило творога") == ("творога", 500)
+    assert foods.extract_quantity("творог 5%") == ("творог 5%", None)
+
+
+def test_split_positions_strips_verbs_and_splits_on_separators() -> None:
+    assert foods.split_positions("съел творог и гречка") == ["творог", "гречка"]
+    assert "борщ" in foods.split_positions("обед: борщ")
+    assert foods.split_positions("съел банан и выпил кефир") == ["банан", "кефир"]
+
+
+def test_chat_offline_resolves_dataset_product(monkeypatch) -> None:
+    """«банан» isn't a staple but is in the Скурихин dataset — offline it must
+    still resolve to an eat card instead of «Не совсем понял»."""
+    conn = get_connection(":memory:")
+    monkeypatch.setattr(actions, "get_optional_llm", lambda: None)
+
+    resp = _chat(conn, "съел банан 100 г")
+
+    assert resp["intent"] == "eat"
+    assert [i["name"] for i in resp["items"]] == ["банан"]
+    assert resp["items"][0]["kcal"] > 0
+    assert "total" in resp
+
+
+def test_chat_offline_resolves_db_product(monkeypatch) -> None:
+    """The literal bug report: a product already stored in the DB, typed exactly
+    as stored, is recognized offline."""
+    conn = get_connection(":memory:")
+    monkeypatch.setattr(actions, "get_optional_llm", lambda: None)
+    pid = conn.execute(
+        "INSERT INTO products (canonical_name, is_food, canonical_unit) "
+        "VALUES ('Протеиновый батончик', 1, 'g')"
+    ).lastrowid
+    conn.execute(
+        "INSERT INTO nutrition (product_id, kcal, protein, fat, carbs, source, updated_at) "
+        "VALUES (?, 350, 20, 10, 40, 'db', datetime('now'))",
+        (pid,),
+    )
+    conn.commit()
+
+    resp = _chat(conn, "съел протеиновый батончик 50 г")
+
+    assert resp["intent"] == "eat"
+    assert len(resp["items"]) == 1
+    assert resp["items"][0]["kcal"] == round(350 * 0.5)  # 50 g of a 350-kcal/100g product
+
+
+def test_chat_offline_multi_position_staple_and_dataset(monkeypatch) -> None:
+    """A staple (яйцо) plus a dataset product (банан) both come back, no dupes."""
+    conn = get_connection(":memory:")
+    monkeypatch.setattr(actions, "get_optional_llm", lambda: None)
+
+    resp = _chat(conn, "съел два яйца и банан 100 г")
+
+    names = [i["name"] for i in resp["items"]]
+    assert "банан" in names
+    assert any("яйц" in n for n in names)
+    assert len(names) == 2
+
+
+def test_chat_offline_variant_not_doubled(monkeypatch) -> None:
+    """«творог обезжиренный» must resolve to the typed variant as ONE item — not
+    a duplicate of the «творог 5%» staple keyword it also brushes."""
+    conn = get_connection(":memory:")
+    monkeypatch.setattr(actions, "get_optional_llm", lambda: None)
+
+    resp = _chat(conn, "съел творог обезжиренный 200 г")
+
+    assert resp["intent"] == "eat"
+    assert len(resp["items"]) == 1
+    assert resp["items"][0]["name"] == "творог обезжиренный"
+
+
 # --- point C: inline macros from the phrase win, tagged as 'user' -----------
 def test_chat_honors_inline_macros(monkeypatch) -> None:
     conn = get_connection(":memory:")

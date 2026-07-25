@@ -24,7 +24,12 @@ from ..inventory.cooking import cook_dish
 from ..planner import suggest_recipes
 from ..products.meal_parse import parse_cook_text, parse_meal_text
 from ..products.models import Product
-from ..products.product_match import find_exact_or_normalized, resolve_product
+from ..products.product_match import (
+    find_exact_or_normalized,
+    head_stem,
+    resolve_product,
+    token_count,
+)
 from ..products.nutrition import resolve_nutrition
 from . import foods
 from .app import db_conn, get_optional_llm
@@ -502,6 +507,48 @@ def _recipes_response(conn: sqlite3.Connection) -> dict:
     return {"intent": "recipes", "text": "Можно приготовить:\n" + "\n".join(lines)}
 
 
+def _offline_positions(conn: sqlite3.Connection, text: str, llm) -> list[dict]:
+    """Resolve arbitrary products offline by splitting the phrase into positions.
+
+    Each chunk (from `foods.split_positions`) is cleaned to a name + amount and
+    run through `estimate_position` — the same DB + Скурихин-dataset cascade the
+    online path uses, which needs no LLM. Only chunks that resolve to known
+    macros become items; filler chunks («обед», a stray verb) drop out. This is
+    what lets the offline chat recognize products stored in the DB or the dataset,
+    not just the 11 staples `foods.parse_foods` hardcodes.
+    """
+    items: list[dict] = []
+    for chunk in foods.split_positions(text):
+        name, amount = foods.extract_quantity(chunk)
+        if not name:
+            continue
+        est = estimate_position(conn, name, amount, llm)
+        if est["known"]:
+            items.append(_estimate_to_payload(est))
+    return items
+
+
+def _merge_positions(staple_items: list[dict], split_items: list[dict]) -> list[dict]:
+    """Combine the staple and chunk-resolved passes into one item per food.
+
+    An exact-name dedup is too weak: the staple pass emits «творог 5%» while the
+    user may have typed «творог обезжиренный», so they collide only on the head
+    noun. Group by `head_stem` and keep the more specific name (more identity
+    tokens); on a tie the staple wins (its canonical name is cleaner). Staples are
+    listed first so ties resolve to them, and first-seen order is preserved.
+    """
+    by_head: dict[str, dict] = {}
+    order: list[str] = []
+    for it in staple_items + split_items:
+        key = head_stem(it["name"]) or it["name"].lower()
+        if key not in by_head:
+            by_head[key] = it
+            order.append(key)
+        elif token_count(it["name"]) > token_count(by_head[key]["name"]):
+            by_head[key] = it
+    return [by_head[key] for key in order]
+
+
 def _eat_response(items: list[dict], title: str | None) -> dict:
     total = Macros(
         kcal=round(sum(i.get("kcal") or 0 for i in items)),
@@ -551,10 +598,13 @@ def chat(payload: ChatIn, conn: sqlite3.Connection = Depends(db_conn)) -> dict:
                 return {"intent": "buy", "items": items}
             return _eat_response(items, foods.detect_meal_title(text))
 
-    # Offline (no LLM) or the model found no food → deterministic rule table.
-    parsed = foods.parse_foods(text)
-    if parsed:
-        items = [_item_payload(p) for p in parsed]
+    # Offline (no LLM) or the model found no food → deterministic resolution:
+    # the rule-table staples merged with chunk-resolved arbitrary products
+    # (DB + bundled Скурихин dataset), one item per food.
+    staple_items = [_item_payload(p) for p in foods.parse_foods(text)]
+    extra_items = _offline_positions(conn, text, llm)
+    items = _merge_positions(staple_items, extra_items)
+    if items:
         if intent == "buy":
             return {"intent": "buy", "items": items}
         return _eat_response(items, foods.detect_meal_title(text))

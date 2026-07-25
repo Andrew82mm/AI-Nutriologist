@@ -70,6 +70,21 @@ def _tokens(name: str) -> list[str]:
     return [t for t in text.split() if len(t) > 1 and t not in _STOPWORDS]
 
 
+def head_stem(name: str) -> str | None:
+    """Stemmed head noun of a product name, for coarse same-food grouping.
+
+    «творог 5%» and «творог обезжиренный» share the stem «творог», so the offline
+    chat merge treats them as one food (keeping the more specific variant).
+    """
+    tokens = _tokens(name)
+    return _stem(tokens[0]) if tokens else None
+
+
+def token_count(name: str) -> int:
+    """Number of identity-bearing tokens — a proxy for how specific a name is."""
+    return len(_tokens(name))
+
+
 def _fuzzy_score(a_tokens: list[str], b_tokens: list[str]) -> float:
     """Order- and morphology-tolerant similarity in [0, 1]."""
     if not a_tokens or not b_tokens:

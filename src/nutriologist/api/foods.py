@@ -60,6 +60,41 @@ def _macros_for(per100: tuple, grams: float) -> tuple[float, float, float, float
     return kcal * k, b * k, zh * k, u * k
 
 
+# --- quantity scanning (shared by parse_foods and the offline chat splitter) -
+_PERCENT_RE = re.compile(r"\d+(?:[.,]\d+)?\s*%")
+
+
+def _scan_amount(text: str) -> tuple[float | None, str | None]:
+    """Extract a raw quantity from a text region → `(number, unit_token)`.
+
+    The number is normalized to a base measure — kg/кило and л are ×1000, so a
+    weight comes back in grams and a volume in ml — while the caller decides how
+    to interpret it against a product's unit (a `шт` staple reads it as a count).
+    `unit_token` is the matched unit word (`мл`/`л`/`г`/`шт`/…) or None.
+
+    Returns `(None, None)` when the region states no quantity. Fat percent
+    («творог 5%») is blanked first so its digits are never read as an amount.
+    """
+    t = _PERCENT_RE.sub(" ", text)
+    if re.search(r"кг|кило", t) and "полкило" not in t:
+        m = re.search(r"([\d.,]+)\s*(кг|кило)", t)
+        num = float(m.group(1).replace(",", ".")) if m else 1
+        return num * 1000, "г"
+    if "полкило" in t:
+        return 500, "г"
+    m = re.search(r"(\d+(?:[.,]\d+)?)\s*(мл|л|г|шт|штук|штуки|стакан)?", t)
+    num = float(m.group(1).replace(",", ".")) if m and m.group(1) else None
+    unit_token = m.group(2) if m else None
+    if num is None:
+        for w, val in _WORD_NUMS.items():
+            if w in t:
+                num = val
+                break
+    if unit_token == "л":
+        return (num or 1) * 1000, "мл"
+    return num, unit_token
+
+
 def parse_foods(text: str) -> list[ParsedFood]:
     """Extract every recognized food + quantity from a Russian phrase."""
     t = " " + text.lower().replace("ё", "е") + " "
@@ -129,6 +164,81 @@ def parse_foods(text: str) -> list[ParsedFood]:
                 per100=f["per100"], amount_canonical=amount_canonical,
             )
         )
+    return out
+
+
+# --- offline chat splitter (arbitrary products, not just the staple table) ---
+# The staple `parse_foods` above only "splits" a phrase by locating its 11
+# keywords. To resolve products stored in the DB or the Скурихин dataset offline,
+# the chat needs to break a free phrase into positions the same way the LLM does
+# online — hence `split_positions` + `extract_quantity`, fed one-by-one into the
+# nutrition cascade (see api/actions.py::_offline_positions).
+
+# Number + unit tokens to drop when cleaning a chunk down to a product name.
+# The fat percent is preserved: a bare number followed by «%» is left in place
+# (negative lookahead), so «творог 5% 200 г» → name «творог 5%».
+_QTY_NUM_RE = re.compile(
+    r"\d+(?:[.,]\d+)?(?!\s*%)\s*(?:кг|кило|мл|л|штук\w*|шт|стакан\w*|грамм\w*|гр|г)?\b"
+)
+# Standalone quantity words (word-numbers, полкило/кило/кг) and leftover unit
+# words that carry no numeral («стакан молока», «кило абрикосов»).
+_QTY_WORD_RE = re.compile(
+    r"\b(?:" + "|".join(map(re.escape, _WORD_NUMS)) + r"|кило|кг)\b"
+)
+_BARE_UNIT_RE = re.compile(r"\b(?:мл|л|штук\w*|шт|стакан\w*|грамм\w*|гр|г)\b")
+
+
+def extract_quantity(chunk: str) -> tuple[str, float | None]:
+    """Split one text chunk into `(clean product name, amount)`.
+
+    `amount` is the quantity in the base measure the resolver expects (grams for
+    mass, ml for volume, else a bare count), or None when none is stated — then
+    `estimate_position` picks a default portion. The name keeps the fat percent
+    but loses the quantity: «творог 5% 200 г» → («творог 5%», 200), «два яйца» →
+    («яйца», 2), «полкило творога» → («творога», 500).
+    """
+    amount, _ = _scan_amount(chunk)
+    name = _QTY_NUM_RE.sub(" ", chunk)
+    name = _QTY_WORD_RE.sub(" ", name)
+    name = _BARE_UNIT_RE.sub(" ", name)
+    name = re.sub(r"\s+", " ", name).strip(" .,:;-")
+    return name, amount
+
+
+# Leading intent/meal filler to strip off a chunk so its head noun is the actual
+# product (the Скурихин lookup gates on the first token — «съел банан» must query
+# «банан», not «съел»). Applied repeatedly from the start of each chunk.
+_LEAD_NOISE_RE = re.compile(
+    r"^\s*(?:"
+    r"съел\w*|поел\w*|скушал\w*|навернул\w*|перекус\w*|позавтракал?|пообедал?|поужинал?|"
+    r"ел|выпил\w*|купил\w*|прибрел\w*|приобрел\w*|взял\w*|принес\w*|закупил\w*|запас\w*|"
+    r"завтрак\w*|обед\w*|ужин\w*|сегодня|утром|днем|вечером|на|во|в"
+    r")\b\s*"
+)
+_POSITION_SPLIT_RE = re.compile(r"[,\n;:]+|\bи\b|\bплюс\b|\+")
+
+
+def _strip_lead(chunk: str) -> str:
+    prev = None
+    while prev != chunk:
+        prev = chunk
+        chunk = _LEAD_NOISE_RE.sub("", chunk, count=1)
+    return chunk
+
+
+def split_positions(text: str) -> list[str]:
+    """Break a food phrase into candidate positions for offline resolution.
+
+    The deterministic counterpart to the LLM's item extraction: split on
+    separators (comma, semicolon, colon, newline, « и », «плюс», «+»), then strip
+    a leading intent verb / meal word off each chunk. Empty chunks are dropped.
+    """
+    t = text.lower().replace("ё", "е")
+    out: list[str] = []
+    for raw in _POSITION_SPLIT_RE.split(t):
+        chunk = _strip_lead(raw).strip()
+        if chunk:
+            out.append(chunk)
     return out
 
 
