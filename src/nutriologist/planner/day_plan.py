@@ -1,4 +1,4 @@
-"""Generate a day's meal plan from goals + current inventory (PLAN.md итерация 7).
+"""Generate a day's meal plan from goals + current inventory.
 
 Division of labour: the LLM proposes a menu (meals with gram amounts), but the
 БЖУ numbers are always *our* deterministic recompute through the nutrition

@@ -1,4 +1,4 @@
--- Full data model per PLAN.md section 8. Tables are created up front so
+-- Full data model. Tables are created up front so
 -- later iterations don't need their own migrations for the base shape;
 -- columns/indexes that a specific iteration still needs to populate are
 -- noted inline. Units are always the canonical tokens 'g' / 'ml' / 'piece'.
@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS receipts (
 
 -- NULL fd_number/fpd rows are never deduplicated against each other: SQLite
 -- treats every NULL as distinct for UNIQUE indexes, which matches the
--- decision in PLAN.md — receipts the LLM fallback couldn't fingerprint are
+-- design decision — receipts the LLM fallback couldn't fingerprint are
 -- saved without a dedup check rather than dropped.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_receipts_fd_fpd
     ON receipts (fd_number, fpd);

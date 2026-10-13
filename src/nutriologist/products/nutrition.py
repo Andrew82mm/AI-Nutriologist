@@ -1,6 +1,6 @@
 """Resolve per-100 nutrition for a product through a source cascade.
 
-Design (PLAN.md итерация 2): the resolver is a cascade of `NutritionSource`s
+Design: the resolver is a cascade of `NutritionSource`s
 tried in priority order — a small curated static stub, then the Скурихин RF
 dataset (`SkurikhinSource`), then an LLM estimate as a last resort. New sources
 (e.g. Open Food Facts) plug in as extra `NutritionSource`s without changing the

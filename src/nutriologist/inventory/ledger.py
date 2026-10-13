@@ -1,6 +1,6 @@
 """Low-level inventory ledger primitives.
 
-Inventory is a ledger, not a mutable counter (PLAN.md итерация 3): every change
+Inventory is a ledger, not a mutable counter: every change
 is a signed row in `inventory_ledger`, and the current stock of a product is the
 SUM of its rows (`v_inventory_current`). Everything higher-level — receipt
 income, manual add/remove, eating, cooking — is built on `record` below.

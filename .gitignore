@@ -5,7 +5,6 @@ __pycache__/
 /data/
 .pytest_cache/
 .~lock.*#
-PLAN.md
 .claude/
 чеки для парса/
 .env

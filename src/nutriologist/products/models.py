@@ -9,7 +9,7 @@ UNIT_ML = "ml"
 UNIT_PIECE = "piece"
 CANONICAL_UNITS = frozenset({UNIT_GRAM, UNIT_ML, UNIT_PIECE})
 
-# Closed category enum (see PLAN.md итерация 2). Kept as a plain tuple rather
+# Closed category enum (closed list). Kept as a plain tuple rather
 # than a SQL CHECK so it can evolve without a migration; the LLM is constrained
 # to it via the JSON schema, and unknown values are coerced to "прочее".
 CATEGORIES = (

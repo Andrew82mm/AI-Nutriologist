@@ -1,4 +1,4 @@
-"""Suggest dishes cookable from what's currently in the fridge (PLAN.md итерация 7).
+"""Suggest dishes cookable from what's currently in the fridge.
 
 A lighter companion to the day planner: no БЖУ math, just the LLM proposing a
 few dishes given the on-hand product list, flagging what's missing for each.
